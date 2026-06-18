@@ -69,7 +69,8 @@ cluster/systemd/          service units (auto-restart, reboot-survival)
 cluster/gateway/          LiteLLM gateway (Claude Code endpoint + spillover)
 cluster/nccl.env          RoCE/NCCL tuning for sharded mode
 scripts/bootstrap/        idempotent node setup, ordered 00 -> 40
-docs/                     architecture, models, networking, comfyui, operations
+docs/                     usage (how to use the models from Claude Code/VS Code/aider),
+                          architecture, models, networking, comfyui, operations
                           (as-built + tooling + how-to), generative-sharding (image/video)
 ```
 
