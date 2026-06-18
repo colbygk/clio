@@ -148,13 +148,19 @@ EOF
 }
 
 cmd_comfyui() {
-  local action=${1:-up}
+  local action=${1:-up} which=${2:-all} hosts=("${NODES[@]}")
+  case "$which" in
+    clio)   hosts=("$CLIO_MGMT");;
+    urania) hosts=("$URANIA_MGMT");;
+    all)    ;;
+    *) die "comfyui up|down [clio|urania]";;
+  esac
   case "$action" in
-    up)   for h in "${NODES[@]}"; do on "$h" 'sudo systemctl start clio-comfyui'; done
-          say "ComfyUI up: http://$CLIO_MGMT:${COMFYUI_PORT} and http://$URANIA_MGMT:${COMFYUI_PORT}"
-          say "Parallelism: add ComfyUI-Distributed via Manager, host on clio, add urania as Remote worker (docs/comfyui.md)";;
-    down) for h in "${NODES[@]}"; do on "$h" 'sudo systemctl stop clio-comfyui 2>/dev/null || true'; done; say "ComfyUI stopped";;
-    *) die "comfyui up|down";;
+    up)   for h in "${hosts[@]}"; do on "$h" 'sudo systemctl start clio-comfyui'; done
+          say "ComfyUI starting on: ${hosts[*]} (:${COMFYUI_PORT}). First start pulls a ~7.5GB image."
+          say "Parallelism: add ComfyUI-Distributed via Manager (host on one, add the other as Remote worker — docs/comfyui.md)";;
+    down) for h in "${hosts[@]}"; do on "$h" 'sudo systemctl stop clio-comfyui 2>/dev/null || true'; done; say "ComfyUI stopped on: ${hosts[*]}";;
+    *) die "comfyui up|down [clio|urania]";;
   esac
 }
 
@@ -207,7 +213,7 @@ case "${1:-}" in
   shard)     shift; cmd_shard "${1:?profile required}";;
   down)      cmd_down;;
   use)       shift; cmd_use "${1:?model required}";;
-  comfyui)   shift; cmd_comfyui "${1:-up}";;
+  comfyui)   shift; cmd_comfyui "$@";;
   nccl-test) cmd_nccl_test;;
   logs)      shift; cmd_logs "$@";;
   *) sed -n '2,20p' "$0"; exit 1;;
