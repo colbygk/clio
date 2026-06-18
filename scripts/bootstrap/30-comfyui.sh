@@ -19,6 +19,12 @@ else
   sudo -u "$REAL_USER" git clone https://github.com/mmartial/ComfyUI-Nvidia-Docker "$REPO"
 fi
 
+# Use SDPA instead of SageAttention: the image is launched with --use-sage-attention, but the
+# sageattention package isn't installed (it needs an on-device sm_121 compile) so ComfyUI
+# crash-loops. SDPA is fine/faster on Blackwell anyway. Idempotent. (Compile SageAttention later
+# as a perf optimization if desired — see docs/comfyui.md.)
+sed -i 's/--use-sage-attention //' "$REPO"/compose-dgx_spark.yaml 2>/dev/null || true
+
 # Persist models/output/custom_nodes under /data/comfyui (created in 00-common).
 # We expose these to the compose via env so the upstream file can mount them.
 cat > "$REPO/.env" <<EOF
