@@ -1,0 +1,28 @@
+# LiteLLM gateway — runs on the HEAD node (clio). Bound to all interfaces so ceres can
+# reach it over the LAN (http://clio:4000) and so it can reach urania over the fabric.
+#
+# Secrets come from cluster/gateway/gateway.env (created by bootstrap, gitignored):
+#   LITELLM_MASTER_KEY=sk-...        # token Claude Code presents
+#   ANTHROPIC_API_KEY=sk-ant-...     # your real Anthropic key, for spillover
+#
+# Start:  docker compose --env-file gateway.env -f compose.yaml up -d
+
+services:
+  gateway:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: clio-gateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

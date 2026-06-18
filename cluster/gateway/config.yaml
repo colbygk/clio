@@ -1,0 +1,64 @@
+# LiteLLM gateway — the single endpoint Claude Code (on ceres) talks to.
+#
+# Exposes BOTH:
+#   - Anthropic Messages API at  /v1/messages   (Claude Code -> ANTHROPIC_BASE_URL)
+#   - OpenAI API at              /v1/...         (aider, Continue, Zed, scripts)
+#
+# Two jobs:
+#   1. Load-balance "local-*" model names across the per-node vLLM servers (scale-out).
+#   2. Spill over to the REAL Claude API for heavy lifts / double-checks.
+#
+# Switching models from ceres is `clusterctl use <model_name>` — it just changes which
+# of these model_name aliases Claude Code requests. Nothing else moves.
+
+model_list:
+  # ---- Local: daily coding model, one deployment per Spark (router load-balances) ----
+  - model_name: local-coder
+    litellm_params:
+      model: hosted_vllm/local-coder            # must match vLLM --served-model-name
+      api_base: http://10.51.50.13:8000/v1      # clio over the fast fabric
+      api_key: "dummy"
+  - model_name: local-coder
+    litellm_params:
+      model: hosted_vllm/local-coder
+      api_base: http://10.51.50.12:8000/v1      # urania over the fast fabric
+      api_key: "dummy"
+
+  # ---- Local: capability model (GPT-OSS-120B). Served name kept stable across profiles. ----
+  - model_name: local-big
+    litellm_params:
+      model: hosted_vllm/local-big
+      api_base: http://10.51.50.13:8000/v1
+      api_key: "dummy"
+  - model_name: local-big
+    litellm_params:
+      model: hosted_vllm/local-big
+      api_base: http://10.51.50.12:8000/v1
+      api_key: "dummy"
+
+  # ---- Spillover: the real Claude API for heavy lifts / verification ----
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  routing_strategy: least-busy        # send each request to the least-loaded local Spark
+  num_retries: 2
+  # If one Spark is down, retries land on the other deployment automatically.
+  allowed_fails: 2
+  cooldown_time: 30
+
+litellm_settings:
+  drop_params: true                   # tolerate Anthropic<->OpenAI param mismatches
+  request_timeout: 600
+  set_verbose: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY   # the token Claude Code/aider present
+  # When scale-up (sharded) mode is active, clusterctl rewrites the local-* api_base
+  # entries to point only at the Ray head (clio) — see docs/architecture.md.

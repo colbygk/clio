@@ -1,0 +1,9 @@
+# Secrets — never commit
+cluster/gateway/gateway.env
+**/secrets.env
+# Runtime state written on nodes (not in this repo, but guard anyway)
+**/active-profile.env
+**/shard-profile.env
+# Local clones built on nodes
+spark-vllm-docker/
+comfyui-docker/

@@ -1,0 +1,19 @@
+# Scale-up (sharded) vLLM server spanning both nodes via Ray. Enabled on the HEAD node only.
+# Mutually exclusive with clio-vllm.service (clusterctl stops the solo servers first).
+[Unit]
+Description=clio cluster - vLLM sharded (PP=2) head server
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+Conflicts=clio-vllm.service
+
+[Service]
+Type=simple
+Environment=CLUSTER_DIR=/opt/clio
+ExecStart=/opt/clio/run/serve-shard.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

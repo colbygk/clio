@@ -1,0 +1,17 @@
+# LiteLLM gateway (Claude Code endpoint + spillover). Enabled on the HEAD node (clio) only.
+[Unit]
+Description=clio cluster - LiteLLM gateway
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/clio/gateway
+ExecStart=/usr/bin/docker compose --env-file /opt/clio/gateway/gateway.env -f compose.yaml up
+ExecStop=/usr/bin/docker compose -f compose.yaml down
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+# Scale-out vLLM server, one per node. Enabled on BOTH clio and urania.
+# clusterctl writes /opt/clio/active-profile.env then restarts this unit.
+[Unit]
+Description=clio cluster - vLLM scale-out node server
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CLUSTER_DIR=/opt/clio
+ExecStart=/opt/clio/run/serve-node.sh
+ExecStop=/usr/bin/docker stop -t 60 vllm
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=0
+# Give model load + JIT cold-start plenty of time before health checks elsewhere.
+
+[Install]
+WantedBy=multi-user.target

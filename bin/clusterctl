@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# clusterctl — one command (run on ceres) to operate the clio/urania DGX Spark cluster.
+#
+#   clusterctl bootstrap            full first-time setup of both nodes (idempotent)
+#   clusterctl status               health of nodes, GPUs, services, fabric
+#   clusterctl models               list available model profiles
+#   clusterctl serve <profile>      SCALE-OUT: run a model on each node, load-balanced
+#   clusterctl shard <profile>      SCALE-UP: run one big model across both nodes (PP=2)
+#   clusterctl down                 stop all model serving
+#   clusterctl use <model>          point THIS machine's Claude Code at a gateway model
+#   clusterctl comfyui up|down      start/stop ComfyUI on both nodes
+#   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
+#   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
+#
+set -euo pipefail
+# Resolve through symlinks (clusterctl is symlinked into ~/.local/bin) to find the real repo.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"; SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+REPO_ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+. "$REPO_ROOT/cluster/inventory.env"
+
+# The SSH key path contains spaces ("Application Support"), which rsync's -e cannot parse.
+# Route through a spaceless symlink so both ssh and rsync work.
+mkdir -p "$HOME/.clio"
+KEYLINK="$HOME/.clio/nvsync.key"
+[ -e "$KEYLINK" ] || ln -sf "$SSH_KEY" "$KEYLINK"
+SSH_KEY="$KEYLINK"
+
+NODES=("$CLIO_MGMT" "$URANIA_MGMT")
+SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8)
+on()    { local h=$1; shift; ssh "${SSH_OPTS[@]}" "$SSH_USER@$h" "$@"; }
+on_t()  { local h=$1; shift; ssh -t "${SSH_OPTS[@]}" "$SSH_USER@$h" "$@"; }
+sudosh(){ local h=$1; shift; on "$h" "sudo bash -c '$*'"; }   # passwordless after bootstrap
+say()   { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+err()   { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; }
+die()   { err "$*"; exit 1; }
+
+rsync_repo() {
+  local h=$1
+  say "Syncing repo -> $h:/opt/clio"
+  on "$h" "sudo mkdir -p /opt/clio && sudo chown $SSH_USER:$SSH_USER /opt/clio"
+  # cluster/* flattens into /opt/clio (so /opt/clio/run, /opt/clio/gateway, /opt/clio/nccl.env ...)
+  rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+    --exclude 'gateway.env' --exclude 'active-profile.env' --exclude 'shard-profile.env' \
+    "$REPO_ROOT/cluster/" "$SSH_USER@$h:/opt/clio/"
+  rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+    "$REPO_ROOT/scripts" "$SSH_USER@$h:/opt/clio/"
+  on "$h" "chmod +x /opt/clio/scripts/bootstrap/*.sh /opt/clio/run/*.sh 2>/dev/null || true"
+}
+
+ensure_passwordless_sudo() {
+  local h=$1
+  if on "$h" 'sudo -n true' 2>/dev/null; then return 0; fi
+  say "Enabling passwordless sudo on $h (one-time; you'll be prompted for the sudo password)"
+  on_t "$h" 'echo "'"$SSH_USER"' ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-clio-nopasswd >/dev/null && sudo chmod 440 /etc/sudoers.d/90-clio-nopasswd && sudo usermod -aG docker '"$SSH_USER"
+}
+
+ensure_node_ssh() {
+  # Passwordless SSH between the two nodes (needed by launch-cluster.sh in shard mode).
+  if on "$CLIO_MGMT" "ssh -o BatchMode=yes -o ConnectTimeout=5 $URANIA_FABRIC hostname" >/dev/null 2>&1; then
+    return 0
+  fi
+  say "Setting up node<->node passwordless SSH over the fabric"
+  on "$CLIO_MGMT"   'test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519'
+  on "$URANIA_MGMT" 'test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519'
+  local cpk upk
+  cpk=$(on "$CLIO_MGMT" 'cat ~/.ssh/id_ed25519.pub')
+  upk=$(on "$URANIA_MGMT" 'cat ~/.ssh/id_ed25519.pub')
+  on "$URANIA_MGMT" "grep -qF '$cpk' ~/.ssh/authorized_keys 2>/dev/null || echo '$cpk' >> ~/.ssh/authorized_keys"
+  on "$CLIO_MGMT"   "grep -qF '$upk' ~/.ssh/authorized_keys 2>/dev/null || echo '$upk' >> ~/.ssh/authorized_keys"
+  # Trust fabric host keys to avoid prompts.
+  on "$CLIO_MGMT"   "ssh-keyscan -H $URANIA_FABRIC >> ~/.ssh/known_hosts 2>/dev/null || true"
+  on "$URANIA_MGMT" "ssh-keyscan -H $CLIO_FABRIC   >> ~/.ssh/known_hosts 2>/dev/null || true"
+}
+
+cmd_bootstrap() {
+  for h in "${NODES[@]}"; do ensure_passwordless_sudo "$h"; done
+  ensure_node_ssh
+  for h in "${NODES[@]}"; do rsync_repo "$h"; done
+  for h in "${NODES[@]}"; do
+    say "[$h] 00-common";  on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/00-common.sh'
+    say "[$h] 10-network"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/10-network.sh'
+    say "[$h] 20-vllm (LONG build)"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/20-vllm.sh'
+    say "[$h] 30-comfyui"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/30-comfyui.sh'
+  done
+  say "[$HEAD] 40-gateway"; on "$HEAD" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/40-gateway.sh'
+  say "Bootstrap complete. Next: clusterctl serve local-coder && clusterctl use local-coder"
+}
+
+profile_path() { echo "$REPO_ROOT/cluster/profiles/$1.env"; }
+
+cmd_serve() {       # scale-out
+  local prof=$1 pf; pf=$(profile_path "$prof"); [ -f "$pf" ] || die "no profile '$prof' (see: clusterctl models)"
+  grep -q '^PROFILE_MODE=scaleout' "$pf" || die "'$prof' is not a scaleout profile (use: clusterctl shard $prof)"
+  say "Serving '$prof' on both nodes (scale-out)"
+  on "$HEAD" 'sudo systemctl stop clio-vllm-shard 2>/dev/null || true'
+  for h in "${NODES[@]}"; do
+    { cat "$pf"; echo "VLLM_PORT=${VLLM_PORT}"; } | on "$h" 'cat > /tmp/active-profile.env && sudo mv /tmp/active-profile.env /opt/clio/active-profile.env'
+    on "$h" 'sudo systemctl restart clio-vllm'
+  done
+  say "Started. Watch load: clusterctl logs vllm clio   |   endpoint stays http://$HEAD:${GATEWAY_PORT}"
+}
+
+cmd_shard() {       # scale-up
+  local prof=$1 pf; pf=$(profile_path "$prof"); [ -f "$pf" ] || die "no profile '$prof'"
+  grep -q '^PROFILE_MODE=shard' "$pf" || die "'$prof' is not a shard profile"
+  say "Sharding '$prof' across both nodes (PP=2). Stopping scale-out servers first."
+  for h in "${NODES[@]}"; do on "$h" 'sudo systemctl stop clio-vllm 2>/dev/null || true'; done
+  { cat "$pf"; echo "VLLM_PORT=${VLLM_PORT}"; } | on "$HEAD" 'cat > /tmp/shard-profile.env && sudo mv /tmp/shard-profile.env /opt/clio/shard-profile.env'
+  on "$HEAD" 'sudo systemctl restart clio-vllm-shard'
+  say "Sharded server starting on $HEAD (spans urania over the fabric). Logs: clusterctl logs shard"
+}
+
+cmd_down() {
+  for h in "${NODES[@]}"; do on "$h" 'sudo systemctl stop clio-vllm 2>/dev/null || true'; done
+  on "$HEAD" 'sudo systemctl stop clio-vllm-shard 2>/dev/null || true'
+  say "All model serving stopped (gateway left running)."
+}
+
+cmd_use() {
+  local model=$1
+  mkdir -p "$HOME/.clio"
+  # Spillover: hand Claude Code back to your Max subscription (its normal login) — no API key,
+  # no per-token cost. Just clear the gateway env so Claude Code uses stored OAuth creds.
+  if [ "$model" = "claude" ] || [ "$model" = "max" ]; then
+    cat > "$HOME/.clio/claude-code.env" <<'EOF'
+# Spillover mode: use your Claude Max subscription (Claude Code's normal login).
+unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL
+EOF
+    say "Claude Code -> your Max subscription (no API key, no metered cost)."
+    echo "   Activate in the shell you run 'claude' from:  source ~/.clio/claude-code.env"
+    return
+  fi
+  # Local models via the Spark gateway.
+  local key; key=$(on "$HEAD" 'grep LITELLM_MASTER_KEY /opt/clio/gateway/gateway.env | cut -d= -f2-') || die "gateway not set up yet"
+  cat > "$HOME/.clio/claude-code.env" <<EOF
+# Source this to point Claude Code at the clio cluster (local Spark models).
+export ANTHROPIC_BASE_URL="http://${HEAD}:${GATEWAY_PORT}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+export ANTHROPIC_MODEL="${model}"
+export ANTHROPIC_SMALL_FAST_MODEL="${model}"
+EOF
+  say "Claude Code -> local model '$model'. Activate now:  source ~/.clio/claude-code.env"
+  echo "   Spill over to your Max plan anytime:  clusterctl use claude"
+}
+
+cmd_comfyui() {
+  local action=${1:-up}
+  case "$action" in
+    up)   for h in "${NODES[@]}"; do on "$h" 'sudo systemctl start clio-comfyui'; done
+          say "ComfyUI up: http://$CLIO_MGMT:${COMFYUI_PORT} and http://$URANIA_MGMT:${COMFYUI_PORT}"
+          say "Parallelism: add ComfyUI-Distributed via Manager, host on clio, add urania as Remote worker (docs/comfyui.md)";;
+    down) for h in "${NODES[@]}"; do on "$h" 'sudo systemctl stop clio-comfyui 2>/dev/null || true'; done; say "ComfyUI stopped";;
+    *) die "comfyui up|down";;
+  esac
+}
+
+cmd_status() {
+  for h in "${NODES[@]}"; do
+    echo "── $h ──"
+    on "$h" 'echo -n "  GPU: "; nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader 2>/dev/null
+             echo -n "  vllm: "; systemctl is-active clio-vllm 2>/dev/null
+             echo -n "  comfyui: "; systemctl is-active clio-comfyui 2>/dev/null
+             echo "  containers: $(docker ps --format "{{.Names}}" 2>/dev/null | tr "\n" " ")"
+             echo "  fabric active_mtu: $(for d in mlx5_0 mlx5_1 mlx5_2 mlx5_3; do ibv_devinfo -d $d 2>/dev/null | awk "/active_mtu/{printf \"%s \", \$2}"; done)"' 2>/dev/null || echo "  (unreachable)"
+  done
+  echo "── gateway ($HEAD:$GATEWAY_PORT) ──"
+  on "$HEAD" "echo -n '  shard: '; systemctl is-active clio-vllm-shard 2>/dev/null; echo -n '  gateway: '; systemctl is-active clio-gateway 2>/dev/null; curl -fsS http://localhost:$GATEWAY_PORT/health/liveliness >/dev/null 2>&1 && echo '  health: ok' || echo '  health: DOWN'"
+}
+
+cmd_nccl_test() {
+  say "RoCE per-rail bandwidth (ib_write_bw). Target ~190 Gb/s aggregate; ~22-24 GB/s/cable in NCCL."
+  on "$URANIA_MGMT" 'pkill -f ib_write_bw 2>/dev/null; (ib_write_bw -d mlx5_1 -F --report_gbits >/dev/null 2>&1 &) ; sleep 1'
+  on "$CLIO_MGMT" "ib_write_bw -d mlx5_1 -F --report_gbits $URANIA_FABRIC 2>&1 | tail -5" || true
+  echo "For the full NCCL all_reduce check (look for 'NET/IB', NOT 'NET/Socket'), run a sharded model with NCCL_DEBUG=INFO and read the logs — see docs/networking.md."
+}
+
+cmd_logs() {
+  local svc=${1:-vllm} node=${2:-$CLIO_MGMT}
+  case "$svc" in
+    vllm)    on "$node" 'sudo journalctl -u clio-vllm -n 80 -f';;
+    shard)   on "$HEAD" 'sudo journalctl -u clio-vllm-shard -n 80 -f';;
+    gateway) on "$HEAD" 'sudo journalctl -u clio-gateway -n 80 -f';;
+    comfyui) on "$node" 'sudo journalctl -u clio-comfyui -n 80 -f';;
+    *) die "logs vllm|shard|gateway|comfyui [node]";;
+  esac
+}
+
+cmd_models() {
+  echo "Profiles (cluster/profiles/*.env):"
+  for f in "$REPO_ROOT"/cluster/profiles/*.env; do
+    local n m mo; n=$(basename "$f" .env)
+    m=$(grep -m1 '^VLLM_MODEL=' "$f" | cut -d= -f2-); mo=$(grep -m1 '^PROFILE_MODE=' "$f" | cut -d= -f2-)
+    printf "  %-20s %-8s %s\n" "$n" "[$mo]" "$m"
+  done
+  echo "Gateway model names for 'clusterctl use': local-coder, local-big, claude-opus-4-8, claude-sonnet-4-6"
+}
+
+case "${1:-}" in
+  bootstrap) cmd_bootstrap;;
+  status)    cmd_status;;
+  models)    cmd_models;;
+  serve|up)  shift; cmd_serve "${1:?profile required}";;
+  shard)     shift; cmd_shard "${1:?profile required}";;
+  down)      cmd_down;;
+  use)       shift; cmd_use "${1:?model required}";;
+  comfyui)   shift; cmd_comfyui "${1:-up}";;
+  nccl-test) cmd_nccl_test;;
+  logs)      shift; cmd_logs "$@";;
+  *) sed -n '2,20p' "$0"; exit 1;;
+esac

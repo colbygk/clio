@@ -1,0 +1,17 @@
+# ComfyUI on a node (template — 30-comfyui.sh fills __REPO__/__COMPOSE_FILE__). On demand only.
+[Unit]
+Description=clio cluster - ComfyUI
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO__
+ExecStart=/usr/bin/docker compose -f __COMPOSE_FILE__ up
+ExecStop=/usr/bin/docker compose -f __COMPOSE_FILE__ down
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
