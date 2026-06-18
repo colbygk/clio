@@ -155,6 +155,47 @@ unnecessary; for speed it underperforms a single quantized run for typical sizes
 
 ---
 
+## 4b. Multinode for *speed* (not size) — sequence / CFG parallel
+
+Distinct from §4: here the model is **replicated on both nodes** (it already fits one box) and the
+**work of one generation** is split → a faster single image/video. All of this lives in
+**[xDiT/xfuser](https://github.com/xdit-project/xDiT)**.
+
+| Method | What it splits | Comms pattern | Link-friendly on RoCE? | Best for |
+|---|---|---|---|---|
+| **CFG-parallel** (degree 2) | the cond/uncond halves of the batch | one tiny exchange/step | **best** | any model using CFG — the natural 2-Spark win |
+| **Ring-Attention** (sequence) | the latent sequence, P2P ring | point-to-point | good | long video / high-res |
+| **Ulysses** (sequence) | the latent sequence, all-to-all | all-to-all (bandwidth-heavy) | poor | only when tensors are huge (video) |
+| **USP** (Ulysses×Ring) | both | mixed | medium | tuned video |
+
+**The hard ceiling of a 2-node / 1-GPU-each setup:** `world_size = 2`, and all parallel degrees must
+multiply to 2 — so you get **exactly one** degree-2 axis (CFG **or** ring **or** pipefusion), never two
+stacked. That caps the theoretical speedup at 2× before comms losses.
+
+**What to expect on *this* link** (no NVLink, ~23 GB/s, no GDR) — sublinear, and only when per-step
+compute is big enough to hide comms:
+- Low-res images (≤1024px): **not worth it** (~1.16× or none — communication-dominated).
+- High-res images (~4096px): **~1.9×** on 2 nodes (xDiT Flux benchmark).
+- **Video: the best case here** (large tensors, high compute-to-comms) — AMD measured ~2× going 1→3
+  nodes for HunyuanVideo over RoCE; expect a meaningful-but-sublinear gain on two Sparks.
+
+**Recommended 2-Spark speed recipe:** start with **CFG-parallel (degree 2)** — cheapest comms, nearly
+free if the model uses classifier-free guidance; switch to **ring** sequence-parallel for long video.
+Avoid pure **Ulysses** (all-to-all) on this link unless the tensors are very large.
+
+Launch = the same multinode `torchrun` as §4, but swap the capacity flag for a speed axis:
+```bash
+# both nodes; source /opt/clio/nccl.env first (incl. NCCL_NET_GDR_LEVEL=0)
+torchrun --nnodes=2 --node_rank={0|1} --nproc_per_node=1 \
+  --master_addr=10.51.50.13 --master_port=29500 examples/<model>_example.py \
+  --use_cfg_parallel                 # degree-2 CFG split (best 2-Spark default)
+  # OR for long video, instead: --ring_degree 2
+  # (NOT both — they'd multiply to 4 > world_size 2)
+```
+**ComfyUI:** **[raylight](https://github.com/komikndr/raylight)** exposes xDiT **USP** (speed) — validate
+single-node first; its Ray multinode mode is the experimental frontier. Otherwise use the
+xDiT-as-a-service pattern from §4.
+
 ## 5. What the second Spark is actually good for (the real win)
 
 - **Parallel render farm (throughput):** `clusterctl comfyui up`, then add urania as a **Remote worker**
