@@ -62,11 +62,14 @@ NOT support GB10. Maintained community image with a ready compose:
 
 ## Very large models on one Spark
 
-**The hard rule: a single ComfyUI generation cannot span both boxes.** Core ComfyUI doesn't shard a
-workflow across machines and doesn't pool VRAM, so **a single image/video model is bounded by one
-Spark's ~119 GB unified memory** — you cannot add clio's + urania's memory together for one model the
-way vLLM's PP=2 does for LLMs. The second Spark buys **throughput** (a second concurrent job via
-ComfyUI-Distributed), never a bigger single model.
+**The practical rule: keep a single generation on one box.** *Vanilla* ComfyUI can't shard a workflow
+across machines or pool VRAM. Specialized engines (**xDiT/PipeFusion**, the **raylight** ComfyUI node)
+*can* split one diffusion model across nodes — but on our ~23 GB/s RoCE link (no NVLink, no GPUDirect
+RDMA) it's communication-bound and sublinear, and you rarely need it anyway because every open
+image/video model fits one 119 GB box once quantized. So treat cross-node spanning as **experimental**
+and bound a single generation by **one Spark's ~119 GB**; the second Spark buys **throughput** (a second
+concurrent job), not a bigger single model. **Full treatment + the experimental how-to:**
+[generative-sharding.md](generative-sharding.md).
 
 The good news: **119 GB unified is already enormous for diffusion** — it runs models that OOM every
 consumer GPU. Most "very large" media models fit on one Spark as-is:
