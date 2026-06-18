@@ -27,6 +27,12 @@ COMFYUI_PORT=${COMFYUI_PORT:-8188}
 EOF
 chown "$REAL_USER":"$REAL_USER" "$REPO/.env"
 
+# The mmartial image runs ComfyUI as uid 1000 and REFUSES to chown PATH-mounted dirs, so it
+# crash-loops if these bind-mount sources are root-owned (Docker auto-creates them as root).
+# Pre-create them owned by 1000:1000 (= colby) to avoid that.
+for d in basedir run userscripts_dir; do mkdir -p "$REPO/$d"; done
+chown -R 1000:1000 "$REPO/basedir" "$REPO/run" "$REPO/userscripts_dir"
+
 COMPOSE_FILE=$(ls "$REPO"/compose-dgx_spark.yaml "$REPO"/compose*spark*.yaml 2>/dev/null | head -1 || true)
 [ -n "$COMPOSE_FILE" ] || warn "compose-dgx_spark.yaml not found in repo — check $REPO and edit clio-comfyui.service"
 log "ComfyUI compose: ${COMPOSE_FILE:-<not found>}"
