@@ -9,10 +9,14 @@ fabric) from one machine (**ceres**), with minimal effort to switch models and f
 - **Two modes:** *scale-out* (a model per Spark, load-balanced — the default) and *scale-up* (one
   big model sharded across both). Switching is one command; ceres config never changes.
 
-> New here? Read `docs/architecture.md` first, then `docs/models.md`, `docs/networking.md`,
-> `docs/comfyui.md`. Everything is grounded in a 2026-06-17 inspection of the actual machines and
-> current sources — see those docs for citations and the reality checks (bandwidth limits, no
-> GPUDirect RDMA, MXFP4 caveats).
+> **What's running right now → [`docs/state.md`](docs/state.md)** (live topology, endpoints, how to
+> use it). Current deployment is a **split**: clio = GPT-OSS-120B (`local-big`) + gateway; urania =
+> ComfyUI with 5 image/video workflows ([`docs/comfyui-deployed.md`](docs/comfyui-deployed.md)).
+>
+> New here? `docs/state.md` for current reality, then `docs/architecture.md` (design),
+> `docs/usage.md` (how to use the models), `docs/models.md`, `docs/networking.md`, `docs/comfyui.md`
+> + `docs/generative-sharding.md` (image/video), `docs/operations.md` (as-built + tooling). Grounded
+> in a 2026-06-17 inspection + current sources (bandwidth limits, no GPUDirect RDMA, MXFP4 caveats).
 
 ## Quick start
 
@@ -69,9 +73,10 @@ cluster/systemd/          service units (auto-restart, reboot-survival)
 cluster/gateway/          LiteLLM gateway (Claude Code endpoint + spillover)
 cluster/nccl.env          RoCE/NCCL tuning for sharded mode
 scripts/bootstrap/        idempotent node setup, ordered 00 -> 40
-docs/                     usage (how to use the models from Claude Code/VS Code/aider),
-                          architecture, models, networking, comfyui, operations
-                          (as-built + tooling + how-to), generative-sharding (image/video)
+docs/                     state (LIVE deployment snapshot), usage (how to use the models),
+                          comfyui-deployed (the running ComfyUI + 5 workflows), architecture,
+                          models, networking, comfyui, operations (as-built + tooling),
+                          generative-sharding (image/video)
 ```
 
 ## Important reality checks (don't skip)
