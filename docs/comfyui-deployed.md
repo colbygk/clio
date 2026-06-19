@@ -29,13 +29,14 @@ The concrete setup running on **urania** (`http://urania:8188` / `http://10.10.1
 ## Installed models
 - **Image checkpoints:** `lustifySDXLNSFW_apexV8` (SDXL, realistic adult), `RealVisXL_V5.0_fp16` (SDXL, general realism), `cyberrealisticPony_v180Coreshift` (**Pony** base, for the Pony LoRA ecosystem).
 - **Pony LoRAs:** `top-down_doggystyle_v0.2-pony` (pose), `cinematic photography detailed pony xl v5.1` (skin/detail), `volumetric lighting style pony v1` (lighting).
-- **Video (Wan 2.2 TI2V-5B i2v):** `wan2.2_ti2v_5B_fp16` (diffusion_models), `umt5_xxl_fp8_e4m3fn_scaled` (text_encoders), `wan2.2_vae` (vae).
+- **Video (Wan 2.2 TI2V-5B i2v, fast/draft):** `wan2.2_ti2v_5B_fp16` (diffusion_models), `umt5_xxl_fp8_e4m3fn_scaled` (text_encoders), `wan2.2_vae` (vae). 24 fps.
+- **Video (Wan 2.2 I2V-A14B, strong motion):** `Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf` + `…-LowNoise-…gguf` (diffusion_models, GGUF), shares the umt5 encoder, uses **`wan_2.1_vae`** (NOT wan2.2_vae). 16 fps. Two-expert MoE.
 - **Support:** `face_yolov8m.pt` + `hand_yolov8n.pt` (detectors), `4x-UltraSharp.pth` (upscaler).
 
 ## Custom nodes installed
 ComfyUI-Impact-Pack **+ Impact-Subpack** (FaceDetailer / UltralyticsDetectorProvider), ComfyUI_UltimateSDUpscale, rgthree-comfy, ComfyUI-GGUF. (Plus built-in Manager.)
 
-## The 5 workflows (Workflow → Open)
+## The 6 workflows (Workflow → Open)
 | Workflow | Does | Notes |
 |---|---|---|
 | `clio_lustify_portrait` | SDXL txt2img → FaceDetailer → 2× UltimateSDUpscale | best-quality stills; swap checkpoint to RealVis if wanted |
@@ -43,8 +44,17 @@ ComfyUI-Impact-Pack **+ Impact-Subpack** (FaceDetailer / UltralyticsDetectorProv
 | `clio_wan_image_to_video` | Load Image (your still) → Wan 2.2 → MP4 | upload a still into Load Image; 832×480, 49 frames (~2 s) |
 | `clio_text_to_image_to_video` | one-click: LUSTIFY still → straight into Wan → MP4 | two prompt areas: **image prompt** (off checkpoint) + **motion prompt** (off Wan CLIPLoader) |
 | `clio_t2v_lora_stack` | Pony + **3 stacked LoRAs** (pose+skin+lighting) → Wan video | shows LoRA stacking via chained LoraLoaders |
+| `clio_wan_a14b_image_to_video` | Load Image → Wan 2.2 **I2V-A14B** (two-expert) → MP4 | **strong-motion** tier; 16 fps, 81 frames (~5 s); many knobs |
 
 Real runs: SDXL image ~15 s; video several minutes (the 15–24 s seen during build was low-step validation).
+
+### Tuning motion (Wan, esp. A14B)
+Motion is driven by **prompt + CFG + (A14B) the expert split** — there is no motion-strength slider.
+- **Prompt** with explicit action verbs (what the subject *does*); put `static, still, motionless, slow motion` in the negative.
+- **CFG** 6→7 = stronger adherence to the motion text.
+- **A14B high/low-noise split** is the #1 lever: the *high-noise* expert creates motion/structure, the *low-noise* refines. Default split is 10 of 20 steps (the high `KSamplerAdvanced` `end_at_step` and the low one's `start_at_step`). Push both to ~13 for **more** motion; pull to ~8 for more refinement.
+- **Shorter clip** reads punchier — 5 s dilutes motion across frames. (length must be 4n+1.)
+- For more still: add a **Wan-base motion LoRA** via `LoraLoaderModelOnly` on each expert.
 
 ## LoRAs — usage & the one rule
 - **Base must match the checkpoint:** Pony LoRA → Pony checkpoint; SDXL LoRA → LUSTIFY/RealVis. A mismatch produces garbage. (Most Civitai pose LoRAs are SD1.5/Pony, *not* SDXL — that's why the LoRA workflows use the Pony checkpoint.)

@@ -11,7 +11,7 @@ fabric) from one machine (**ceres**), with minimal effort to switch models and f
 
 > **What's running right now → [`docs/state.md`](docs/state.md)** (live topology, endpoints, how to
 > use it). Current deployment is a **split**: clio = GPT-OSS-120B (`local-big`) + gateway; urania =
-> ComfyUI with 5 image/video workflows ([`docs/comfyui-deployed.md`](docs/comfyui-deployed.md)).
+> ComfyUI with 6 image/video workflows ([`docs/comfyui-deployed.md`](docs/comfyui-deployed.md)).
 >
 > New here? `docs/state.md` for current reality, then `docs/architecture.md` (design),
 > `docs/usage.md` (how to use the models), `docs/models.md`, `docs/networking.md`, `docs/comfyui.md`
