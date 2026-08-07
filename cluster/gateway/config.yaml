@@ -12,28 +12,18 @@
 # of these model_name aliases Claude Code requests. Nothing else moves.
 
 model_list:
-  # ---- Local: daily coding model, one deployment per Spark (router load-balances) ----
+  # ---- SPLIT routing: coder on urania, capability model on clio (one model per box) ----
   - model_name: local-coder
     litellm_params:
       model: hosted_vllm/local-coder            # must match vLLM --served-model-name
-      api_base: http://10.51.50.13:8000/v1      # clio over the fast fabric
-      api_key: "dummy"
-  - model_name: local-coder
-    litellm_params:
-      model: hosted_vllm/local-coder
       api_base: http://10.51.50.12:8000/v1      # urania over the fast fabric
       api_key: "dummy"
 
-  # ---- Local: capability model (GPT-OSS-120B). Served name kept stable across profiles. ----
+  # ---- local-big = GPT-OSS-120B on clio (no backend until the mxfp4 build + serve completes) ----
   - model_name: local-big
     litellm_params:
       model: hosted_vllm/local-big
-      api_base: http://10.51.50.13:8000/v1
-      api_key: "dummy"
-  - model_name: local-big
-    litellm_params:
-      model: hosted_vllm/local-big
-      api_base: http://10.51.50.12:8000/v1
+      api_base: http://10.51.50.13:8000/v1      # clio over the fast fabric
       api_key: "dummy"
 
   # ---- Spillover: the real Claude API for heavy lifts / verification ----
