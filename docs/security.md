@@ -99,6 +99,19 @@ curl --cacert ~/.clio/ca/ca.crt \
      https://clio.cgk.sh/system_stats
 ```
 
+## Browsing generated output
+
+`https://<node>.cgk.sh/outputs/` is a plain nginx `autoindex` of `basedir/output/`, behind the same
+client-certificate gate. It exists because **ComfyUI's Assets sidebar is a model browser** — the
+frontend only ever requests `/api/assets?include_tags=models`, so past generations never appear
+there even though the backend indexes them (173 tagged `output` on urania). The queue/history panel
+does show generations, but it is per-session and does not survive a container restart.
+
+Served statically, so byte-range requests work and mp4s seek in the browser rather than downloading
+in full first (verified: `HTTP 206` on a ranged GET). Files are `0644` and directories `0755`, so
+`www-data` reads them with no ownership change. Each node lists its **own** outputs — `output/` is
+deliberately not shared, unlike `models/` and `input/`.
+
 ## Error pages
 
 nginx serves pages styled to match https://cgk.sh (dark `#161B21` header band, Baloo Bhaina 2

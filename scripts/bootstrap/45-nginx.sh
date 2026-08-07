@@ -91,7 +91,9 @@ for page in denied upstream error; do
   chmod 644 "/usr/share/nginx/clio-errors/_$page.html"
 done
 
+OUTPUT_DIR=$CLUSTER_DIR/comfyui-docker/basedir/output
 sed -e "s|__FQDN__|$FQDN|g" -e "s|__HOST__|$HOST|g" -e "s|__PORT__|$PORT|g" \
+    -e "s|__OUTPUT_DIR__|$OUTPUT_DIR|g" \
     "$CLUSTER_DIR/nginx/comfyui.conf.tmpl" > /etc/nginx/sites-available/clio-comfyui
 ln -sf /etc/nginx/sites-available/clio-comfyui /etc/nginx/sites-enabled/clio-comfyui
 # The stock default site also claims default_server on :80 and would collide.
