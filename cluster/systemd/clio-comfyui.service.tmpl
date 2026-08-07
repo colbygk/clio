@@ -1,9 +1,20 @@
 # ComfyUI on a node (template — 30-comfyui.sh fills __REPO__/__COMPOSE_FILE__). On demand only.
+#
+# Mutually exclusive with the vLLM units: one 119 GiB unified-memory pool serves both the GPU and
+# the system, so a model server and ComfyUI cannot coexist (an OOM here freezes the whole box).
+# Conflicts= makes the swap atomic — `systemctl start clio-comfyui` stops vLLM first, and starting
+# vLLM again stops ComfyUI. Drive it with `clusterctl mode <node> llm|comfy|off`.
 [Unit]
 Description=clio cluster - ComfyUI
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
+Conflicts=clio-vllm.service clio-vllm-shard.service
+# The model store may be an NFS mount (clio mounts urania's over the fabric). Docker bind-mounts
+# basedir recursively at container start, so the NFS mounts must already be up or the container
+# sees empty dirs. On the node that OWNS the store these paths are plain directories on / and this
+# resolves to -.mount, which is always active — so the same unit works on both nodes.
+RequiresMountsFor=__REPO__/basedir/models __REPO__/basedir/input
 
 [Service]
 Type=simple

@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# clio-pki — the private CA for the cluster's HTTPS + mutual-TLS access control.
+#
+#   clio-pki init                 create the CA (once). Idempotent — refuses to clobber.
+#   clio-pki server <clio|urania> issue/renew that node's HTTPS server certificate
+#   clio-pki client <name>        issue a client certificate + .p12 bundle to install on a device
+#   clio-pki revoke <name>        drop a client from the allow-list (see NOTE on revocation)
+#   clio-pki list                 what exists, and when it expires
+#   clio-pki ca-cert              print the CA certificate (this is what you trust on a device)
+#
+# WHY A PRIVATE CA RATHER THAN LET'S ENCRYPT
+#   The nodes are RFC1918-only, so the HTTP-01 challenge cannot reach them; DNS-01 would mean
+#   certbot + DNSimple API credentials on each node (whose apt is wedged) and a 90-day renewal
+#   treadmill. And mutual TLS needs a CA we control regardless, to sign and validate the client
+#   certificates. One CA does both jobs, and nothing expires while you are on a plane.
+#
+# WHERE THE KEYS LIVE
+#   $CA_DIR (default ~/.clio/ca) on ceres, mode 0700 — NOT in the git repo. The CA private key
+#   never goes to the nodes; only the CA *certificate* does, so nginx can verify clients.
+#   The key is not passphrase-protected (issuing would prompt every time); it is protected by
+#   file permissions on your workstation. If that trade is wrong for you, add -aes256 to the
+#   genrsa in init and expect a prompt on every issue.
+set -euo pipefail
+
+CA_DIR=${CA_DIR:-$HOME/.clio/ca}
+DOMAIN=${DOMAIN:-cgk.sh}
+CA_DAYS=3650          # 10 years for the root — you trust it by hand, rotating it is the painful part
+SRV_DAYS=825          # ~27 months. Apple's 398-day cap exempts user-added roots, so this is fine.
+CLI_DAYS=825
+
+say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+err() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
+
+need_ca() { [ -f "$CA_DIR/ca.crt" ] || die "no CA yet — run: clio-pki init"; }
+
+cmd_init() {
+  [ -f "$CA_DIR/ca.crt" ] && die "CA already exists at $CA_DIR (delete it by hand if you really mean to start over — every issued cert becomes untrusted)"
+  mkdir -p "$CA_DIR"/{certs,private,clients}
+  chmod 700 "$CA_DIR" "$CA_DIR/private" "$CA_DIR/clients"
+  say "Generating CA key (RSA 4096)"
+  openssl genrsa -out "$CA_DIR/private/ca.key" 4096 2>/dev/null
+  chmod 600 "$CA_DIR/private/ca.key"
+  # basicConstraints CA:true + pathlen:0 — this root signs leaves only, never a sub-CA.
+  openssl req -x509 -new -nodes -sha256 -days $CA_DAYS \
+    -key "$CA_DIR/private/ca.key" -out "$CA_DIR/ca.crt" \
+    -subj "/O=cgk.sh/OU=clio cluster/CN=cgk.sh Internal CA" \
+    -addext "basicConstraints=critical,CA:true,pathlen:0" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+  say "CA created: $CA_DIR/ca.crt"
+  echo "   Trust this on each device you want to use (see docs/security.md)."
+}
+
+# Issue a leaf. $1=name $2=days $3=extfile-content
+issue() {
+  local name=$1 days=$2 ext=$3
+  local key="$CA_DIR/private/$name.key" crt="$CA_DIR/certs/$name.crt"
+  openssl genrsa -out "$key" 2048 2>/dev/null
+  chmod 600 "$key"
+  local csr; csr=$(mktemp); local extf; extf=$(mktemp)
+  printf '%s\n' "$ext" > "$extf"
+  openssl req -new -key "$key" -out "$csr" -subj "/O=cgk.sh/OU=clio cluster/CN=$name" 2>/dev/null
+  openssl x509 -req -in "$csr" -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/private/ca.key" \
+    -CAcreateserial -out "$crt" -days "$days" -sha256 -extfile "$extf" 2>/dev/null
+  rm -f "$csr" "$extf"
+}
+
+cmd_server() {
+  need_ca
+  local host=${1:?"server <clio|urania>"} ip
+  case "$host" in
+    clio)   ip=10.10.10.149;;
+    urania) ip=10.10.10.155;;
+    *) die "unknown host '$host' (clio|urania)";;
+  esac
+  local fqdn="$host.$DOMAIN"
+  say "Issuing server certificate for $fqdn ($ip), $SRV_DAYS days"
+  # SANs cover the FQDN, the bare hostname, the LAN IP and loopback, so the cert is valid however
+  # you reach the box. CN is ignored by modern clients — only SANs matter.
+  issue "$fqdn" $SRV_DAYS "basicConstraints=critical,CA:false
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:$fqdn,DNS:$host,IP:$ip,IP:127.0.0.1"
+  say "  $CA_DIR/certs/$fqdn.crt"
+}
+
+cmd_client() {
+  need_ca
+  local name=${1:?"client <name>  (e.g. ceres, colby-iphone)"}
+  local p12="$CA_DIR/clients/$name.p12" pwfile="$CA_DIR/clients/$name.p12.password"
+  say "Issuing client certificate '$name', $CLI_DAYS days"
+  issue "$name" $CLI_DAYS "basicConstraints=critical,CA:false
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=clientAuth
+subjectAltName=email:$name@$DOMAIN"
+  # A .p12 is what macOS/iOS/Windows import. An export password is effectively mandatory —
+  # iOS silently rejects password-less bundles.
+  local pw; pw=$(openssl rand -base64 18)
+  printf '%s\n' "$pw" > "$pwfile"; chmod 600 "$pwfile"
+  openssl pkcs12 -export -legacy \
+    -inkey "$CA_DIR/private/$name.key" -in "$CA_DIR/certs/$name.crt" \
+    -certfile "$CA_DIR/ca.crt" -name "clio cluster ($name)" \
+    -out "$p12" -passout "pass:$pw" 2>/dev/null \
+  || openssl pkcs12 -export \
+    -inkey "$CA_DIR/private/$name.key" -in "$CA_DIR/certs/$name.crt" \
+    -certfile "$CA_DIR/ca.crt" -name "clio cluster ($name)" \
+    -out "$p12" -passout "pass:$pw"
+  chmod 600 "$p12"
+  say "Bundle:   $p12"
+  say "Password: $pw"
+  echo "   (also saved to $pwfile)"
+}
+
+# NOTE on revocation: nginx's ssl_crl needs a CRL that must be regenerated and redeployed before
+# it takes effect, and an expired CRL blocks ALL clients — a classic self-inflicted outage. With a
+# handful of devices it is simpler and safer to re-issue: delete the client, and if a device is
+# actually lost, rotate the CA and re-enroll the rest. This command does the local half.
+cmd_revoke() {
+  need_ca
+  local name=${1:?"revoke <name>"}
+  rm -f "$CA_DIR/certs/$name.crt" "$CA_DIR/private/$name.key" \
+        "$CA_DIR/clients/$name.p12" "$CA_DIR/clients/$name.p12.password"
+  say "Removed local material for '$name'."
+  err "That does NOT lock out a device that already holds the cert."
+  echo "   To actually revoke: re-run 'clio-pki init' after moving $CA_DIR aside, re-issue the"
+  echo "   server certs and every client, then 'clusterctl nginx deploy'. See docs/security.md."
+}
+
+cmd_list() {
+  need_ca
+  printf '%-34s %-12s %s\n' NAME KIND EXPIRES
+  printf '%-34s %-12s %s\n' "cgk.sh Internal CA" ca "$(openssl x509 -enddate -noout -in "$CA_DIR/ca.crt" | cut -d= -f2)"
+  for c in "$CA_DIR"/certs/*.crt; do
+    [ -e "$c" ] || continue
+    local n k; n=$(basename "$c" .crt)
+    k=$(openssl x509 -noout -ext extendedKeyUsage -in "$c" 2>/dev/null | grep -q 'TLS Web Server' && echo server || echo client)
+    printf '%-34s %-12s %s\n' "$n" "$k" "$(openssl x509 -enddate -noout -in "$c" | cut -d= -f2)"
+  done
+}
+
+cmd_ca_cert() { need_ca; cat "$CA_DIR/ca.crt"; }
+
+case "${1:-}" in
+  init)    cmd_init;;
+  server)  shift; cmd_server "$@";;
+  client)  shift; cmd_client "$@";;
+  revoke)  shift; cmd_revoke "$@";;
+  list)    cmd_list;;
+  ca-cert) cmd_ca_cert;;
+  *) sed -n '2,20p' "$0"; exit 1;;
+esac

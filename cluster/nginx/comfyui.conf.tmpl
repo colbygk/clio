@@ -1,0 +1,72 @@
+# ComfyUI behind nginx with mutual TLS (template — 45-nginx.sh fills __FQDN__/__HOST__/__PORT__).
+#
+# The only way in is 443 with a client certificate signed by the cluster CA. ComfyUI itself binds
+# 127.0.0.1 only (see 30-comfyui.sh), so this proxy is not merely the front door — it is the ONLY
+# door. That matters: ComfyUI has no authentication of its own and custom nodes execute arbitrary
+# code, which is exactly what the Apr-2026 botnet swept the internet for.
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name __FQDN__ __HOST__;
+    # Nothing is served over plaintext; bounce to TLS. (No ACME dance to preserve — private CA.)
+    return 301 https://__FQDN__$request_uri;
+}
+
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+    server_name __FQDN__ __HOST__;
+
+    ssl_certificate     /etc/clio-pki/server.crt;
+    ssl_certificate_key /etc/clio-pki/server.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # ---- mutual TLS: the access-control barrier ----
+    # A client with no certificate, a self-signed one, or one from any other CA is rejected during
+    # the handshake — it never reaches ComfyUI. default_server above means this also applies when
+    # the box is addressed by bare IP, so there is no unauthenticated side entrance.
+    ssl_client_certificate /etc/clio-pki/ca.crt;
+    ssl_verify_client on;
+    ssl_verify_depth 1;
+
+    # ComfyUI moves big payloads: source stills in, rendered video out.
+    client_max_body_size 2048m;
+    # A single Wan render can run for many minutes with no bytes on the wire; the default 60s
+    # read timeout would tear the connection down mid-job.
+    proxy_read_timeout  3600s;
+    proxy_send_timeout  3600s;
+    send_timeout        3600s;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    access_log /var/log/nginx/comfyui.access.log;
+    error_log  /var/log/nginx/comfyui.error.log;
+
+    location / {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_http_version 1.1;
+
+        # ComfyUI's progress/preview channel is a WebSocket; without these it silently degrades
+        # to a UI that never updates while a job runs.
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Pass the verified client identity through, so ComfyUI logs show who did what.
+        proxy_set_header X-Client-DN       $ssl_client_s_dn;
+
+        # Stream progress events straight through instead of buffering them into silence.
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}

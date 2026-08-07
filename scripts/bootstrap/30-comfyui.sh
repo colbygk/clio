@@ -25,6 +25,13 @@ fi
 # as a perf optimization if desired — see docs/comfyui.md.)
 sed -i 's/--use-sage-attention //' "$REPO"/compose-dgx_spark.yaml 2>/dev/null || true
 
+# Publish ComfyUI on loopback only. It has no authentication of its own and custom nodes run
+# arbitrary code, so the LAN must reach it solely through nginx's mutual-TLS front door
+# (45-nginx.sh). Docker's default 0.0.0.0 binding is what exposes it. Idempotent.
+# NOTE: this makes ComfyUI unreachable from the OTHER node too, which would matter if you ever
+# adopt ComfyUI-Distributed — that needs a deliberate exception, not an accidental one.
+sed -i -E 's|^(\s*)-\s*"?8188:8188"?|\1- 127.0.0.1:8188:8188|' "$REPO"/compose-dgx_spark.yaml 2>/dev/null || true
+
 # Persist models/output/custom_nodes under /data/comfyui (created in 00-common).
 # We expose these to the compose via env so the upstream file can mount them.
 cat > "$REPO/.env" <<EOF

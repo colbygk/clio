@@ -8,7 +8,9 @@
 #   clusterctl shard <profile>      SCALE-UP: run one big model across both nodes (PP=2)
 #   clusterctl down                 stop all model serving
 #   clusterctl use <model>          point THIS machine's Claude Code at a gateway model
+#   clusterctl mode <node> [role]   show/set a node's role: llm | comfy | off (they are exclusive)
 #   clusterctl comfyui up|down      start/stop ComfyUI on both nodes
+#   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
 #   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
 #   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
 #
@@ -43,8 +45,12 @@ rsync_repo() {
   say "Syncing repo -> $h:/opt/clio"
   on "$h" "sudo mkdir -p /opt/clio && sudo chown $SSH_USER:$SSH_USER /opt/clio"
   # cluster/* flattens into /opt/clio (so /opt/clio/run, /opt/clio/gateway, /opt/clio/nccl.env ...)
+  # --delete prunes anything on the node that isn't in cluster/. The bootstrap scripts clone two
+  # big working trees INTO /opt/clio (comfyui-docker holds the entire ComfyUI basedir: models,
+  # custom nodes, workflows), so they must be excluded or a repo sync would wipe them.
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude 'gateway.env' --exclude 'active-profile.env' --exclude 'shard-profile.env' \
+    --exclude 'comfyui-docker/' --exclude 'spark-vllm-docker/' \
     "$REPO_ROOT/cluster/" "$SSH_USER@$h:/opt/clio/"
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
     "$REPO_ROOT/scripts" "$SSH_USER@$h:/opt/clio/"
@@ -85,6 +91,13 @@ cmd_bootstrap() {
     say "[$h] 10-network"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/10-network.sh'
     say "[$h] 20-vllm (LONG build)"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/20-vllm.sh'
     say "[$h] 30-comfyui"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/30-comfyui.sh'
+  done
+  # 35 is ordered, not per-node: the store host must be exporting before the other node mounts it.
+  local store other
+  store=$(resolve_node "$COMFY_STORE_HOST")
+  other=$([ "$store" = "$CLIO_MGMT" ] && echo "$URANIA_MGMT" || echo "$CLIO_MGMT")
+  for h in "$store" "$other"; do
+    say "[$h] 35-comfyui-share"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/35-comfyui-share.sh'
   done
   say "[$HEAD] 40-gateway"; on "$HEAD" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/40-gateway.sh'
   say "Bootstrap complete. Next: clusterctl serve local-coder && clusterctl use local-coder"
@@ -147,6 +160,48 @@ EOF
   echo "   Spill over to your Max plan anytime:  clusterctl use claude"
 }
 
+resolve_node() {
+  case "$1" in
+    clio)   echo "$CLIO_MGMT";;
+    urania) echo "$URANIA_MGMT";;
+    *)      die "unknown node '$1' (clio|urania)";;
+  esac
+}
+
+# A node has ONE unified-memory pool shared by CPU and GPU, so it hosts exactly one memory-hungry
+# role at a time.
+#
+# The units declare Conflicts= on each other, which guarantees the two can never STAY up together
+# — but Conflicts= carries no ordering, so on a bare `systemctl start` the incoming role begins
+# while the outgoing one is still shutting down. vLLM checks free unified memory at startup and
+# crash-loops if it is short, so that overlap is a real failure mode. Here we stop the outgoing
+# role synchronously first (systemctl stop blocks until the unit is down, and the vLLM unit's
+# ExecStop gives docker up to 60s to release the model) and only then start the incoming one.
+# Conflicts= stays as the safety net for anyone driving systemctl directly.
+cmd_mode() {
+  local name=${1:?"mode <clio|urania> [llm|comfy|off]"} role=${2:-} node
+  node=$(resolve_node "$name")
+  case "$role" in
+    llm)
+      say "$name -> llm (stopping ComfyUI first, then starting clio-vllm)"
+      on "$node" 'sudo systemctl stop clio-comfyui; sudo systemctl reset-failed clio-comfyui 2>/dev/null; sudo systemctl start clio-vllm'
+      say "Model comes from /opt/clio/active-profile.env. Cold start is slow — clusterctl logs vllm $name";;
+    comfy)
+      say "$name -> comfy (stopping vLLM first, then starting clio-comfyui)"
+      on "$node" 'sudo systemctl stop clio-vllm clio-vllm-shard; sudo systemctl reset-failed clio-vllm clio-vllm-shard 2>/dev/null; sudo systemctl start clio-comfyui'
+      say "ComfyUI at http://$node:${COMFYUI_PORT} (LAN only — never port-forward it)";;
+    off)
+      say "$name -> off (stopping both roles, freeing the memory pool)"
+      on "$node" 'sudo systemctl stop clio-comfyui clio-vllm clio-vllm-shard 2>/dev/null || true';;
+    "")
+      ;;   # fall through to the status readout below
+    *) die "mode <clio|urania> [llm|comfy|off]";;
+  esac
+  printf '\033[1;36m==>\033[0m %s: ' "$name"
+  on "$node" 'v=$(systemctl is-active clio-vllm); s=$(systemctl is-active clio-vllm-shard); c=$(systemctl is-active clio-comfyui)
+              if [ "$c" = active ]; then echo "comfy"; elif [ "$v" = active ] || [ "$s" = active ]; then echo "llm"; else echo "off"; fi'
+}
+
 cmd_comfyui() {
   local action=${1:-up} which=${2:-all} hosts=("${NODES[@]}")
   case "$which" in
@@ -156,11 +211,54 @@ cmd_comfyui() {
     *) die "comfyui up|down [clio|urania]";;
   esac
   case "$action" in
-    up)   for h in "${hosts[@]}"; do on "$h" 'sudo systemctl start clio-comfyui'; done
+    up)   for h in "${hosts[@]}"; do on "$h" 'sudo systemctl stop clio-vllm clio-vllm-shard; sudo systemctl start clio-comfyui'; done
           say "ComfyUI starting on: ${hosts[*]} (:${COMFYUI_PORT}). First start pulls a ~7.5GB image."
+          say "Any vLLM server on those nodes was stopped (Conflicts=) — 'clusterctl mode <node> llm' puts it back."
           say "Parallelism: add ComfyUI-Distributed via Manager (host on one, add the other as Remote worker — docs/comfyui.md)";;
     down) for h in "${hosts[@]}"; do on "$h" 'sudo systemctl stop clio-comfyui 2>/dev/null || true'; done; say "ComfyUI stopped on: ${hosts[*]}";;
     *) die "comfyui up|down [clio|urania]";;
+  esac
+}
+
+# Push the node's HTTPS cert + the CA cert (for verifying clients) and (re)configure nginx.
+# The CA PRIVATE key stays on ceres — a node never needs it and should never hold it.
+cmd_nginx() {
+  local action=${1:-deploy} which=${2:-all} hosts=("${NODES[@]}")
+  local ca_dir=${CA_DIR:-$HOME/.clio/ca}
+  case "$which" in
+    clio)   hosts=("$CLIO_MGMT");;
+    urania) hosts=("$URANIA_MGMT");;
+    all)    ;;
+    *) die "nginx deploy|status [clio|urania]";;
+  esac
+  case "$action" in
+    deploy)
+      [ -f "$ca_dir/ca.crt" ] || die "no CA — run: clio-pki init && clio-pki server clio && clio-pki server urania"
+      for h in "${hosts[@]}"; do
+        local short=${h%%.*} fqdn
+        fqdn="$short.${CLUSTER_DOMAIN:-cgk.sh}"
+        [ -f "$ca_dir/certs/$fqdn.crt" ] || die "no server cert for $fqdn — run: clio-pki server $short"
+        say "Deploying certs + nginx to $h"
+        on "$h" 'rm -rf /tmp/clio-pki && mkdir -p /tmp/clio-pki && chmod 700 /tmp/clio-pki'
+        scp -q "${SSH_OPTS[@]}" "$ca_dir/ca.crt"                "$SSH_USER@$h:/tmp/clio-pki/ca.crt"
+        scp -q "${SSH_OPTS[@]}" "$ca_dir/certs/$fqdn.crt"        "$SSH_USER@$h:/tmp/clio-pki/server.crt"
+        scp -q "${SSH_OPTS[@]}" "$ca_dir/private/$fqdn.key"      "$SSH_USER@$h:/tmp/clio-pki/server.key"
+        on "$h" "sudo mkdir -p /opt/clio/nginx"
+        scp -q "${SSH_OPTS[@]}" "$REPO_ROOT/cluster/nginx/comfyui.conf.tmpl" "$SSH_USER@$h:/tmp/comfyui.conf.tmpl"
+        scp -q "${SSH_OPTS[@]}" "$REPO_ROOT/scripts/bootstrap/45-nginx.sh"   "$SSH_USER@$h:/tmp/45-nginx.sh"
+        on "$h" 'sudo cp /tmp/comfyui.conf.tmpl /opt/clio/nginx/ && sudo cp /tmp/45-nginx.sh /opt/clio/scripts/bootstrap/ && sudo chmod +x /opt/clio/scripts/bootstrap/45-nginx.sh
+                 sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/45-nginx.sh'
+      done
+      say "Done. Reach it at https://<node>.${CLUSTER_DOMAIN:-cgk.sh}/ with a client certificate."
+      say "No cert on this Mac yet?  clio-pki client <name>   then import the .p12 (docs/security.md)";;
+    status)
+      for h in "${hosts[@]}"; do
+        echo "── $h ──"
+        on "$h" 'echo -n "  nginx: "; systemctl is-active nginx 2>/dev/null
+                 echo -n "  cert expires: "; openssl x509 -enddate -noout -in /etc/clio-pki/server.crt 2>/dev/null | cut -d= -f2 || echo "(none)"
+                 echo -n "  8188 binding: "; sudo ss -tlnp 2>/dev/null | awk "/:8188 /{print \$4; exit}"' 2>/dev/null || echo "  (unreachable)"
+      done;;
+    *) die "nginx deploy|status [clio|urania]";;
   esac
 }
 
@@ -213,7 +311,9 @@ case "${1:-}" in
   shard)     shift; cmd_shard "${1:?profile required}";;
   down)      cmd_down;;
   use)       shift; cmd_use "${1:?model required}";;
+  mode)      shift; cmd_mode "$@";;
   comfyui)   shift; cmd_comfyui "$@";;
+  nginx)     shift; cmd_nginx "$@";;
   nccl-test) cmd_nccl_test;;
   logs)      shift; cmd_logs "$@";;
   *) sed -n '2,20p' "$0"; exit 1;;

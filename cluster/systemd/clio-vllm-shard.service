@@ -5,7 +5,7 @@ Description=clio cluster - vLLM sharded (PP=2) head server
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
-Conflicts=clio-vllm.service
+Conflicts=clio-vllm.service clio-comfyui.service
 
 [Service]
 Type=simple

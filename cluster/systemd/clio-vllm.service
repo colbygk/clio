@@ -5,6 +5,8 @@ Description=clio cluster - vLLM scale-out node server
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
+# One unified-memory pool per node: a model server and ComfyUI cannot both hold it.
+Conflicts=clio-comfyui.service
 
 [Service]
 Type=simple

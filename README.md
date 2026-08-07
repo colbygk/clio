@@ -10,8 +10,9 @@ fabric) from one machine (**ceres**), with minimal effort to switch models and f
   big model sharded across both). Switching is one command; ceres config never changes.
 
 > **What's running right now → [`docs/state.md`](docs/state.md)** (live topology, endpoints, how to
-> use it). Current deployment is a **split**: clio = GPT-OSS-120B (`local-big`) + gateway; urania =
-> ComfyUI with 6 image/video workflows ([`docs/comfyui-deployed.md`](docs/comfyui-deployed.md)).
+> use it). Current deployment is a **split**: clio = GPT-OSS-120B (`local-big`) + gateway **or**
+> ComfyUI (`clusterctl mode clio llm|comfy` — they're mutually exclusive); urania = ComfyUI with 6
+> image/video workflows ([`docs/comfyui-deployed.md`](docs/comfyui-deployed.md)).
 >
 > New here? `docs/state.md` for current reality, then `docs/architecture.md` (design),
 > `docs/usage.md` (how to use the models), `docs/models.md`, `docs/networking.md`, `docs/comfyui.md`
@@ -48,9 +49,16 @@ clusterctl down                    # stop serving
 clusterctl use local-big           # local capability model
 clusterctl use claude              # spill over to your Claude Max subscription (no API key)
 
-# Media:
-clusterctl comfyui up              # ComfyUI on both: http://clio:8188 , http://urania:8188
+# Media (HTTPS + client cert required — see docs/security.md):
+clusterctl comfyui up              # ComfyUI on both: https://clio.cgk.sh , https://urania.cgk.sh
 clusterctl comfyui down
+clio-pki client <device>           # enroll a device (issues a .p12 to install)
+clusterctl nginx deploy|status     # push certs + nginx config / check the posture
+
+# Swap a node between serving a model and running ComfyUI (they can't share the memory pool):
+clusterctl mode clio comfy         # stops clio-vllm, starts ComfyUI
+clusterctl mode clio llm           # stops ComfyUI, starts vLLM (pays the model cold start)
+clusterctl mode clio               # what is clio doing right now?
 
 # Fabric / debugging:
 clusterctl nccl-test               # RoCE bandwidth across the fabric
@@ -65,7 +73,9 @@ Drop a `cluster/profiles/<name>.env` (copy an existing one), then `clusterctl se
 ## Layout
 ```
 bin/clusterctl            the one command you run on ceres
+bin/clio-pki              the private CA: server certs + client certs for mutual TLS
 ceres/install.sh          installs clusterctl on ceres
+cluster/nginx/            nginx site template (HTTPS + mTLS front door for ComfyUI)
 cluster/inventory.env     single source of truth (IPs, ifaces, ports, hardware)
 cluster/profiles/         model profiles (what to serve)
 cluster/run/              node launch scripts (driven by systemd)
@@ -73,8 +83,11 @@ cluster/systemd/          service units (auto-restart, reboot-survival)
 cluster/gateway/          LiteLLM gateway (Claude Code endpoint + spillover)
 cluster/nccl.env          RoCE/NCCL tuning for sharded mode
 scripts/bootstrap/        idempotent node setup, ordered 00 -> 40
+scripts/sync-comfyui-from-urania.sh   pull node-local ComfyUI state (workflows) to clio
 docs/                     state (LIVE deployment snapshot), usage (how to use the models),
-                          comfyui-deployed (the running ComfyUI + 5 workflows), architecture,
+                          security (HTTPS + mutual TLS, the private CA, enrolling a device),
+                          comfyui-deployed (the running ComfyUI + 6 workflows),
+                          comfyui-shared-store (one model copy, NFS/RDMA), architecture,
                           models, networking, comfyui, operations (as-built + tooling),
                           generative-sharding (image/video)
 ```

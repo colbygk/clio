@@ -1,14 +1,27 @@
-# ComfyUI on urania — as deployed
+# ComfyUI — as deployed (urania + clio)
 
-The concrete setup running on **urania** (`http://urania:8188` / `http://10.10.10.155:8188`). Concepts
-+ model fit are in [comfyui.md](comfyui.md); large-model strategy in
-[generative-sharding.md](generative-sharding.md). This is the operational reality. Last updated 2026-06-19.
+The concrete setup running on **urania** (`http://urania:8188`) and, since 2026-08-07, **clio**
+(`http://clio:8188`). Both nodes are configured identically; the paths below are the same on each.
+Concepts + model fit are in [comfyui.md](comfyui.md); large-model strategy in
+[generative-sharding.md](generative-sharding.md). This is the operational reality. Last updated 2026-08-07.
 
-> **Keep it LAN-only** — never port-forward `:8188`. ComfyUI custom nodes run arbitrary code; an
-> Apr-2026 botnet hit exposed instances.
+> **Access is now via HTTPS + a client certificate** — `https://clio.cgk.sh/` and
+> `https://urania.cgk.sh/`. Port 8188 is loopback-only on both nodes, so the URLs below are
+> historical. See [security.md](security.md). Never port-forward any of this: ComfyUI custom nodes
+> run arbitrary code, and an Apr-2026 botnet hit exposed instances.
+
+## Which node runs it
+- **urania** is ComfyUI-only — nothing competes for its memory. It also **owns the model store**,
+  which clio mounts ([comfyui-shared-store.md](comfyui-shared-store.md)); if urania is down,
+  clio's ComfyUI will not start.
+- **clio** is dual-role: ComfyUI **or** GPT-OSS-120B, never both (one 119 GiB unified pool; an OOM
+  freezes the box). The units declare `Conflicts=` on each other, so the swap is atomic:
+  `clusterctl mode clio comfy` / `clusterctl mode clio llm`. See [state.md](state.md).
+- Running both nodes at once is what makes ComfyUI-Distributed worthwhile — but it costs you
+  `local-big` for the duration.
 
 ## Container & paths
-- Image: `mmartial/comfyui-nvidia-docker:ubuntu24_cuda13.1-dgx-latest` (systemd `clio-comfyui.service`, on demand: `clusterctl comfyui up|down urania`).
+- Image: `mmartial/comfyui-nvidia-docker:ubuntu24_cuda13.1-dgx-latest` (systemd `clio-comfyui.service`, on demand: `clusterctl comfyui up|down [clio|urania]`).
 - Launched with **`--base-directory /basedir`**, so all data lives under the host path
   **`/opt/clio/comfyui-docker/basedir/`** → `models/<type>/`, `custom_nodes/`, `user/`, `input/`, `output/`.
   (The ComfyUI *code* is at `/comfy/mnt/ComfyUI`; the **venv is `/comfy/mnt/venv`**, not under ComfyUI.)
@@ -16,7 +29,7 @@ The concrete setup running on **urania** (`http://urania:8188` / `http://10.10.1
 - The image's `--use-sage-attention` flag is **stripped** in bootstrap (SageAttention isn't built for
   sm_121) → it uses **SDPA**, which is fine/faster on Blackwell.
 
-## Where to put files (host paths on urania)
+## Where to put files (host paths — same on both nodes, and the same *bytes*: `models/` is a shared NFS mount)
 | Type | Folder |
 |---|---|
 | Checkpoints | `/opt/clio/comfyui-docker/basedir/models/checkpoints/` |
@@ -32,6 +45,20 @@ The concrete setup running on **urania** (`http://urania:8188` / `http://10.10.1
 - **Video (Wan 2.2 TI2V-5B i2v, fast/draft):** `wan2.2_ti2v_5B_fp16` (diffusion_models), `umt5_xxl_fp8_e4m3fn_scaled` (text_encoders), `wan2.2_vae` (vae). 24 fps.
 - **Video (Wan 2.2 I2V-A14B, strong motion):** `Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf` + `…-LowNoise-…gguf` (diffusion_models, GGUF), shares the umt5 encoder, uses **`wan_2.1_vae`** (NOT wan2.2_vae). 16 fps. Two-expert MoE.
 - **Support:** `face_yolov8m.pt` + `hand_yolov8n.pt` (detectors), `4x-UltraSharp.pth` (upscaler).
+
+> **The model list above is stale.** It describes the 2026-06-19 build. urania has since accumulated
+> a much larger set (as of 2026-08-07: 3 checkpoints, ~87 LoRAs, 9 GGUF unets, 5 upscalers — mostly
+> Wan 2.2 I2V high/low-noise LoRA pairs). Treat the loader dropdowns in the UI as the real inventory;
+> the entries below are just the ones the six documented workflows reference.
+
+### Node parity (2026-08-07)
+There is **one copy of the models**, on urania, NFS-mounted onto clio over the 200G fabric — so both
+nodes see the identical set and nothing needs copying. See
+[comfyui-shared-store.md](comfyui-shared-store.md). Node-local pieces that still need syncing:
+
+```bash
+ssh clio.cgk.sh 'sudo bash /opt/clio/scripts/sync-comfyui-from-urania.sh'   # workflows + node drift report
+```
 
 ## Custom nodes installed
 ComfyUI-Impact-Pack **+ Impact-Subpack** (FaceDetailer / UltralyticsDetectorProvider), ComfyUI_UltimateSDUpscale, rgthree-comfy, ComfyUI-GGUF. (Plus built-in Manager.)

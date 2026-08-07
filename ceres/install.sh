@@ -6,9 +6,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINDIR="${BINDIR:-$HOME/.local/bin}"
 mkdir -p "$BINDIR" "$HOME/.clio"
 ln -sf "$REPO_ROOT/bin/clusterctl" "$BINDIR/clusterctl"
-chmod +x "$REPO_ROOT/bin/clusterctl"
+ln -sf "$REPO_ROOT/bin/clio-pki"  "$BINDIR/clio-pki"
+chmod +x "$REPO_ROOT/bin/clusterctl" "$REPO_ROOT/bin/clio-pki"
 
 echo "Installed clusterctl -> $BINDIR/clusterctl"
+echo "Installed clio-pki   -> $BINDIR/clio-pki"
 case ":$PATH:" in
   *":$BINDIR:"*) : ;;
   *) echo "NOTE: add $BINDIR to your PATH, e.g.:  echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.zshrc" ;;

@@ -1,6 +1,12 @@
 # Secrets — never commit
 cluster/gateway/gateway.env
 **/secrets.env
+# PKI. The CA lives in ~/.clio/ca (outside this repo) by design; these are belt-and-braces so a
+# stray copy can never be committed. A leaked CA key = anyone can mint a client cert and get in.
+**/*.key
+**/*.p12
+**/*.password
+ca/
 # Runtime state written on nodes (not in this repo, but guard anyway)
 **/active-profile.env
 **/shard-profile.env

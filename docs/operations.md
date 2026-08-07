@@ -46,6 +46,16 @@ record of the live state.
 ### Media stack (`scripts/bootstrap/30-comfyui.sh`)
 - Cloned [`mmartial/ComfyUI-Nvidia-Docker`](https://github.com/mmartial/ComfyUI-Nvidia-Docker) to
   `/opt/clio/comfyui-docker`; installed **`clio-comfyui.service`** (left disabled — on-demand).
+- Custom nodes are cloned into `basedir/custom_nodes/` per node. The image installs ComfyUI's and
+  the Manager's requirements but **not** each custom node's — do that in the container venv, as
+  uid 1000 (`docker exec` defaults to uid 1025, which cannot write the venv):
+  `docker exec -u 1000 comfyui-nvidia /comfy/mnt/venv/bin/python -m pip install -r /basedir/custom_nodes/<node>/requirements.txt`.
+  The venv is bind-mounted from `run/`, so this survives restarts.
+
+### Shared model store (`scripts/bootstrap/35-comfyui-share.sh`)
+- One copy of `basedir/{models,input}` on urania, exported NFSv4.2-over-RDMA to clio across the
+  fabric (~1.5–1.8 GB/s, vs ~970 MB/s for TCP `nconnect=16`). Ordered: the store host must export
+  before the other node mounts. Full detail + failure modes: [comfyui-shared-store.md](comfyui-shared-store.md).
 
 ### Gateway (`scripts/bootstrap/40-gateway.sh`, clio only)
 - Pulled `ghcr.io/berriai/litellm:main-stable`; created `/opt/clio/gateway/gateway.env`
@@ -129,10 +139,40 @@ Writes `~/.clio/claude-code.env`. Then `source ~/.clio/claude-code.env` in the s
 - `clusterctl use claude` (or `max`) → **unsets** those, so Claude Code falls back to your **Max
   subscription** (no API key, no metered cost). This is the spillover path.
 
+### `clusterctl mode <node> [llm|comfy|off]` — swap a node's role
+A node has **one** 119 GiB unified-memory pool shared by CPU and GPU, so it can host a vLLM model
+server **or** ComfyUI, never both (an OOM here freezes the box). `mode` is the switch:
+- `mode clio comfy` → starts `clio-comfyui`; systemd stops `clio-vllm` first.
+- `mode clio llm` → starts `clio-vllm` (model per `/opt/clio/active-profile.env`); stops ComfyUI.
+- `mode clio off` → stops both, leaving the pool free.
+- `mode clio` (no role) → prints the node's current role.
+
+*Mechanics:* two layers, and the distinction matters.
+- **`Conflicts=`** on the units (`clio-comfyui.service` ↔ the two vLLM units) guarantees the roles can
+  never *stay* up together, including for someone running `systemctl` directly.
+- **But `Conflicts=` implies no ordering** — on a bare `systemctl start` the incoming role begins
+  while the outgoing one is still shutting down, and the two briefly overlap. vLLM checks free
+  unified memory at startup, so a comfy→llm swap during that overlap can fail the check and
+  crash-loop. `clusterctl mode` therefore does an explicit synchronous `systemctl stop` of the
+  outgoing role (plus `reset-failed`, since interrupting a mid-startup vLLM leaves the unit failed)
+  before starting the incoming one. Prefer `clusterctl mode` over raw `systemctl` for this reason.
+
+Cost of a swap: ComfyUI is up in seconds; coming back to `llm` pays the model's cold start (~20 min
+for GPT-OSS-120B, mostly JIT + CUDA-graph capture).
+
 ### `clusterctl comfyui up|down`
-Starts/stops `clio-comfyui` on both nodes (UI on `:8188` each). For parallel jobs across both, add
-**ComfyUI-Distributed** via the in-app Manager (host on clio, urania as a Remote worker) — see
-[comfyui.md](comfyui.md).
+Starts/stops `clio-comfyui` on both nodes (UI on `:8188` each), or one with `comfyui up clio`. Same
+`Conflicts=` applies — bringing ComfyUI up stops any vLLM server on that node. For parallel jobs
+across both, add **ComfyUI-Distributed** via the in-app Manager (host on clio, urania as a Remote
+worker) — see [comfyui.md](comfyui.md).
+
+### `clusterctl nginx deploy|status [node]` — the HTTPS + mutual-TLS front door
+`deploy` pushes the node's server certificate, the CA certificate (used only to *verify clients*)
+and the site config, installs nginx if absent, reloads, and rebinds ComfyUI's published port to
+`127.0.0.1`. Certificates come from `bin/clio-pki` on ceres; **the CA private key never leaves
+ceres**. `status` reports nginx state, certificate expiry and the current 8188 binding.
+*Gotcha:* nginx here is installed with `apt-get install -d` + explicit `dpkg -i` — a plain
+`apt-get install` aborts on the wedged DOCA/OFED DKMS packages. Full model: [security.md](security.md).
 
 ### `clusterctl models`
 Lists profiles and the gateway model names.
