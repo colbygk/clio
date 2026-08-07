@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- Catch-all for the remaining codes (403/404/405/408/413/500). Deliberately vague about what
+     went wrong: this is reachable only by an authenticated client, but there is still no reason to
+     narrate internals back to the browser. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Something went wrong – __FQDN__</title>
+<link rel="shortcut icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@100;200;300&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+Bhaina+2&display=swap" rel="stylesheet">
+<style>
+<!--CSS-->
+</style>
+</head>
+<body>
+  <header class="header">
+    <span class="header__title">cgk.sh</span>
+    <div class="header__tagline">__FQDN__</div>
+  </header>
+
+  <main class="main">
+    <div class="code">Error</div>
+    <h1>Something went wrong.</h1>
+
+    <p>That request could not be completed. It may be a bad URL, a request that was too large,
+       or a fault on this node.</p>
+
+    <div class="hint">
+      <p style="margin-bottom:0">The detail is in the logs on this host:
+         <code>/var/log/nginx/comfyui.error.log</code>, or
+         <code>clusterctl logs comfyui __HOST__</code> from ceres.</p>
+    </div>
+  </main>
+
+  <div class="footer__copyright">__FQDN__ &middot; clio cluster</div>
+</body>
+</html>

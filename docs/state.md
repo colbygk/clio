@@ -35,6 +35,13 @@ onto clio across the fabric (~1.5–1.8 GB/s). Add a model on either node, both 
 **clio's ComfyUI depends on urania being up.** Details: [comfyui-shared-store.md](comfyui-shared-store.md).
 
 - Fabric: 4×200G ConnectX-7 RoCE, MTU 9000 / `active_mtu` 4096 (see [networking.md](networking.md)).
+- **Management LAN is MTU 1500 — jumbo frames belong on the fabric only.** urania's `enP7s7` was
+  wrongly set to 9000 (fixed 2026-08-07 via `nmcli`, persisted). On a 1500 switch that black-holes
+  large packets: TCP connects, then SSH hangs and TLS dies at the certificate, with no ICMP
+  "fragmentation needed" because a layer-2 switch does not send one. It presented as "urania is
+  busy/unreachable" and only became constant once HTTPS made responses big enough to trip it.
+  `10-network.sh` now warns if a management interface is not 1500. Note **ceres's `en0` is also
+  MTU 9000**, which is why it was one end of the broken pair — worth setting to 1500 as well.
 - The **coder** (`local-coder`, Qwen3-Coder-30B-FP8) is **parked** — urania was repurposed to ComfyUI.
   To bring it back you'd free a box and `clusterctl serve local-coder` (it'd then need a node).
 - GUI is masked/headless on both nodes; passwordless sudo for `colby`; `colby` in the docker group.

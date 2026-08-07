@@ -64,6 +64,26 @@ map $http_upgrade $connection_upgrade {
 }
 EOF
 
+# Error pages, styled to match https://cgk.sh. The shared CSS is injected into each page at the
+# <!--CSS--> marker so the served file is self-contained — a stylesheet fetched as a second request
+# would need a client certificate of its own, leaving the "you are not allowed" page unstyled.
+log "Installing styled error pages"
+install -d -m 755 /usr/share/nginx/clio-errors
+for page in denied upstream error; do
+  src="$CLUSTER_DIR/nginx/errors/$page.html"
+  [ -f "$src" ] || { warn "missing $src — skipping"; continue; }
+  # Inject CSS, fill placeholders, then strip HTML comments — the source comments explain nginx
+  # internals (which error codes map here, and the stock text being replaced) and there is no
+  # reason to hand that to an unauthenticated caller staring at the denied page.
+  awk -v cssfile="$CLUSTER_DIR/nginx/errors/_base.css" '
+    /<!--CSS-->/ { while ((getline line < cssfile) > 0) print line; next }
+    { print }' "$src" \
+    | sed -e "s|__FQDN__|$FQDN|g" -e "s|__HOST__|$HOST|g" \
+    | python3 -c 'import re,sys; sys.stdout.write(re.sub(r"<!--.*?-->", "", sys.stdin.read(), flags=re.S))' \
+    > "/usr/share/nginx/clio-errors/_$page.html"
+  chmod 644 "/usr/share/nginx/clio-errors/_$page.html"
+done
+
 sed -e "s|__FQDN__|$FQDN|g" -e "s|__HOST__|$HOST|g" -e "s|__PORT__|$PORT|g" \
     "$CLUSTER_DIR/nginx/comfyui.conf.tmpl" > /etc/nginx/sites-available/clio-comfyui
 ln -sf /etc/nginx/sites-available/clio-comfyui /etc/nginx/sites-enabled/clio-comfyui

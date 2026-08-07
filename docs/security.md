@@ -65,6 +65,28 @@ curl --cacert ~/.clio/ca/ca.crt \
      https://clio.cgk.sh/system_stats
 ```
 
+## Error pages
+
+nginx serves pages styled to match https://cgk.sh (dark `#161B21` header band, Baloo Bhaina 2
+headings, `#0000a0` links) instead of its stock white walls. Sources: `cluster/nginx/errors/`.
+
+| nginx code | Served as | Page |
+|---|---|---|
+| 496 (no client cert), 495 (bad client cert) | **400** | "You are not allowed." — points at this file and `clio-pki client <name>` |
+| 502 / 503 / 504 | as-is | "ComfyUI is not answering." — names the likely cause (node is in `llm` mode) and the `clusterctl mode` fix |
+| 400 403 404 405 408 413 500 | as-is | generic |
+| 497 (plain HTTP on the TLS port) | 301 | redirect to `https://<fqdn>` |
+
+Two details that are load-bearing rather than cosmetic:
+- **The CSS is inlined into each page.** A linked stylesheet would be a second request needing its
+  own client certificate — so the "you are not allowed" page would render unstyled, precisely when
+  it is the only thing a visitor can see.
+- **HTML comments are stripped at install time.** The sources explain which nginx codes map where;
+  that detail should not be handed to an unauthenticated caller.
+
+`=400` on the `error_page` directive keeps the status identical to nginx's default, so nothing that
+scripts against these hosts sees a behaviour change — only the body text differs.
+
 ## Operating it
 
 ```bash

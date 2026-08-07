@@ -1,0 +1,91 @@
+/* Shared look for the nginx error pages, lifted from https://cgk.sh so a rejection still feels
+   like part of the site rather than a raw nginx wall.
+     body      #fff / #1C1C1C, "Open Sans", Helvetica, sans-serif   (the site links Josefin Sans
+               and Baloo Bhaina 2 from Google Fonts but never loads Open Sans, so body text
+               actually renders as Helvetica — replicated here rather than "corrected", so these
+               pages match what the site really looks like)
+     headings  "Baloo Bhaina 2", cursive
+     header    #161B21 band, title 3em weight 100 in white
+     links     #0000a0 weight 600, hover #A2DED0
+     muted     #ABB7B7 at 13px, as in .footer__copyright
+   Inlined into every page: an error page must render with no working backend, and the CSP-free
+   simplicity means one less thing to break. */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 100%; -webkit-text-size-adjust: 100%; }
+body {
+  background: #fff;
+  color: #1C1C1C;
+  font-family: "Open Sans", Helvetica, sans-serif;
+  font-weight: 400;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.header {
+  background: #161B21;
+  padding: 40px;
+}
+.header__title {
+  font-family: "Baloo Bhaina 2", cursive;
+  font-size: 3em;
+  font-weight: 100;
+  line-height: 1;
+  color: #fff;
+  display: block;
+}
+.header__tagline {
+  font-family: "Baloo Bhaina 2", cursive;
+  font-size: 1em;
+  font-weight: 300;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 6px;
+}
+.main {
+  flex: 1;
+  padding: 60px 40px;
+  max-width: 46em;
+}
+.code {
+  font-family: "Baloo Bhaina 2", cursive;
+  font-size: 13px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: #ABB7B7;
+}
+h1 {
+  font-family: "Baloo Bhaina 2", cursive;
+  font-size: 2.6em;
+  font-weight: 400;
+  line-height: 1.1;
+  color: #1C1C1C;
+  margin: 6px 0 24px;
+}
+p { margin-bottom: 1em; }
+a { color: #0000a0; font-weight: 600; text-decoration: none; transition: color .15s ease-in-out; }
+a:hover { color: #A2DED0; }
+code, kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .9em;
+  background: #f4f6f8;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.hint {
+  border-left: 3px solid #A2DED0;
+  padding: 2px 0 2px 16px;
+  margin: 24px 0;
+}
+.footer__copyright {
+  padding: 0 40px 40px;
+  font-size: 13px;
+  color: #ABB7B7;
+}
+@media (max-width: 600px) {
+  .header { padding: 28px 20px; }
+  .header__title { font-size: 2.2em; }
+  .main { padding: 40px 20px; }
+  .footer__copyright { padding: 0 20px 28px; }
+}

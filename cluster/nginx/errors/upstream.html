@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- 502/503/504: nginx is fine, ComfyUI is not answering on 127.0.0.1:8188. On clio the usual
+     cause is mundane and worth saying out loud — the node is in `llm` mode, so ComfyUI is
+     deliberately stopped. Saying so beats a bare "502 Bad Gateway". -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComfyUI is not answering – __FQDN__</title>
+<link rel="shortcut icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@100;200;300&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+Bhaina+2&display=swap" rel="stylesheet">
+<style>
+<!--CSS-->
+</style>
+</head>
+<body>
+  <header class="header">
+    <span class="header__title">cgk.sh</span>
+    <div class="header__tagline">__FQDN__</div>
+  </header>
+
+  <main class="main">
+    <div class="code">Error 502</div>
+    <h1>ComfyUI is not answering.</h1>
+
+    <p>Your certificate was accepted — you are through the door. But nothing is listening on
+       <code>127.0.0.1:8188</code> on this node right now.</p>
+
+    <div class="hint">
+      <p>Most likely this node is serving a language model instead. The two cannot run at once:
+         one unified-memory pool per box.</p>
+      <p style="margin-bottom:0">From ceres: <code>clusterctl mode __HOST__</code> to see the current
+         role, <code>clusterctl mode __HOST__ comfy</code> to switch it back.</p>
+    </div>
+
+    <p>If it should be running, <code>clusterctl logs comfyui __HOST__</code> will say why it isn't.</p>
+  </main>
+
+  <div class="footer__copyright">__FQDN__ &middot; clio cluster</div>
+</body>
+</html>

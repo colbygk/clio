@@ -82,4 +82,23 @@ for s in 50 51 52 53; do
   fi
 done
 
+# Jumbo frames belong on the FABRIC only. The management LAN switch carries 1500, and an oversized
+# MTU there is a silent killer: the TCP handshake succeeds (small packets) while anything larger is
+# dropped by the switch, which — being layer 2 — sends no "fragmentation needed" back, so path-MTU
+# discovery never kicks in. Symptoms are SSH sessions that connect then hang and TLS that dies right
+# at the certificate. urania sat like this until 2026-08-07. Warn rather than change it: the fix
+# belongs in NetworkManager (`nmcli con mod <con> 802-3-ethernet.mtu 1500`), not in a bootstrap run.
+MGMT_IFACE=$(ip -4 -o route get 10.10.10.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+if [ -n "${MGMT_IFACE:-}" ]; then
+  MGMT_MTU=$(cat "/sys/class/net/$MGMT_IFACE/mtu" 2>/dev/null || echo "?")
+  if [ "$MGMT_MTU" != "1500" ]; then
+    warn "management interface $MGMT_IFACE has MTU $MGMT_MTU (expected 1500)."
+    warn "  On a 1500 LAN this black-holes large packets: ssh hangs, TLS fails after the cert."
+    warn "  Fix: sudo nmcli con mod \"\$(nmcli -g GENERAL.CONNECTION dev show $MGMT_IFACE)\" 802-3-ethernet.mtu 1500"
+    ok=0
+  else
+    echo "  mgmt $MGMT_IFACE mtu=1500 (correct — jumbo is fabric-only)"
+  fi
+fi
+
 [ "$ok" = 1 ] && log "10-network done (jumbo MTU active)" || warn "10-network done with warnings — recheck active_mtu after BOTH nodes run this"

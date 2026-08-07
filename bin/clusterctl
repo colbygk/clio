@@ -243,10 +243,14 @@ cmd_nginx() {
         scp -q "${SSH_OPTS[@]}" "$ca_dir/ca.crt"                "$SSH_USER@$h:/tmp/clio-pki/ca.crt"
         scp -q "${SSH_OPTS[@]}" "$ca_dir/certs/$fqdn.crt"        "$SSH_USER@$h:/tmp/clio-pki/server.crt"
         scp -q "${SSH_OPTS[@]}" "$ca_dir/private/$fqdn.key"      "$SSH_USER@$h:/tmp/clio-pki/server.key"
-        on "$h" "sudo mkdir -p /opt/clio/nginx"
-        scp -q "${SSH_OPTS[@]}" "$REPO_ROOT/cluster/nginx/comfyui.conf.tmpl" "$SSH_USER@$h:/tmp/comfyui.conf.tmpl"
-        scp -q "${SSH_OPTS[@]}" "$REPO_ROOT/scripts/bootstrap/45-nginx.sh"   "$SSH_USER@$h:/tmp/45-nginx.sh"
-        on "$h" 'sudo cp /tmp/comfyui.conf.tmpl /opt/clio/nginx/ && sudo cp /tmp/45-nginx.sh /opt/clio/scripts/bootstrap/ && sudo chmod +x /opt/clio/scripts/bootstrap/45-nginx.sh
+        on "$h" 'rm -rf /tmp/nginx-src && mkdir -p /tmp/nginx-src'
+        scp -qr "${SSH_OPTS[@]}" "$REPO_ROOT/cluster/nginx/comfyui.conf.tmpl" "$REPO_ROOT/cluster/nginx/errors" \
+                "$SSH_USER@$h:/tmp/nginx-src/"
+        scp -q  "${SSH_OPTS[@]}" "$REPO_ROOT/scripts/bootstrap/45-nginx.sh"   "$SSH_USER@$h:/tmp/45-nginx.sh"
+        on "$h" 'sudo mkdir -p /opt/clio/nginx && sudo rm -rf /opt/clio/nginx/errors
+                 sudo cp -r /tmp/nginx-src/comfyui.conf.tmpl /tmp/nginx-src/errors /opt/clio/nginx/
+                 sudo cp /tmp/45-nginx.sh /opt/clio/scripts/bootstrap/ && sudo chmod +x /opt/clio/scripts/bootstrap/45-nginx.sh
+                 rm -rf /tmp/nginx-src /tmp/45-nginx.sh
                  sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/45-nginx.sh'
       done
       say "Done. Reach it at https://<node>.${CLUSTER_DOMAIN:-cgk.sh}/ with a client certificate."

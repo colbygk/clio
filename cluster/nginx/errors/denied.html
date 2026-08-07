@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- Served for nginx 495 (bad client cert) and 496 (no client cert), re-stated as HTTP 400 so the
+     status a caller sees is unchanged from before this page existed. Replaces nginx's default
+     "400 Bad Request / No required SSL certificate was sent". -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>You are not allowed. – __FQDN__</title>
+<link rel="shortcut icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@100;200;300&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+Bhaina+2&display=swap" rel="stylesheet">
+<style>
+<!--CSS-->
+</style>
+</head>
+<body>
+  <header class="header">
+    <span class="header__title">cgk.sh</span>
+    <div class="header__tagline">__FQDN__</div>
+  </header>
+
+  <main class="main">
+    <div class="code">Error 400</div>
+    <h1>You are not allowed.</h1>
+
+    <p>This host requires a <strong>client TLS certificate</strong> issued by the cluster's private
+       certificate authority. Your browser either sent none, or sent one this host does not trust.</p>
+
+    <div class="hint">
+      <p>If this is your machine, you need to enroll it. See <code>docs/security.md</code> in the
+         <code>clio</code> repository — issue a bundle with <code>clio-pki client &lt;name&gt;</code>,
+         install the <code>.p12</code>, and trust the CA certificate.</p>
+      <p style="margin-bottom:0">On iOS the step people miss is
+         <em>Settings → General → About → Certificate Trust Settings</em>.</p>
+    </div>
+
+    <p>Nothing behind this door is reachable without that certificate.</p>
+  </main>
+
+  <div class="footer__copyright">__FQDN__ &middot; clio cluster</div>
+</body>
+</html>

@@ -49,6 +49,23 @@ server {
     access_log /var/log/nginx/comfyui.access.log;
     error_log  /var/log/nginx/comfyui.error.log;
 
+    # ---- styled error pages (see cluster/nginx/errors/) ----
+    # 495 = client sent a certificate that failed verification, 496 = it sent none. nginx surfaces
+    # both to the client as 400, so `=400` keeps the observable status exactly as it was while
+    # replacing the stock "No required SSL certificate was sent" body.
+    error_page 495 496 =400 /_denied.html;
+    # 497 is plain HTTP spoken to the TLS port — send them to the real front door.
+    error_page 497 https://__FQDN__$request_uri;
+    error_page 502 503 504 /_upstream.html;
+    error_page 400 403 404 405 408 413 500 /_error.html;
+
+    # `internal` means these can only be reached by nginx's own error redirect, never fetched
+    # directly. The CSS is inlined into each page: a second request for a stylesheet would itself
+    # need a client certificate, so the denied page would render unstyled — exactly when it matters.
+    location = /_denied.html   { internal; root /usr/share/nginx/clio-errors; }
+    location = /_upstream.html { internal; root /usr/share/nginx/clio-errors; }
+    location = /_error.html    { internal; root /usr/share/nginx/clio-errors; }
+
     location / {
         proxy_pass http://127.0.0.1:__PORT__;
         proxy_http_version 1.1;
