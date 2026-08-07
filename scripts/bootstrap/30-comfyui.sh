@@ -25,6 +25,13 @@ fi
 # as a perf optimization if desired — see docs/comfyui.md.)
 sed -i 's/--use-sage-attention //' "$REPO"/compose-dgx_spark.yaml 2>/dev/null || true
 
+# ComfyUI's Assets browser (the sidebar listing models, inputs and outputs) ships DISABLED; without
+# --enable-assets the panel renders empty and /api/assets returns 503 SERVICE_DISABLED, which looks
+# like missing data rather than a missing flag. Idempotent.
+grep -q -- '--enable-assets' "$REPO"/compose-dgx_spark.yaml 2>/dev/null \
+  || sed -i 's|COMFY_CMDLINE_EXTRA: --bf16-unet|COMFY_CMDLINE_EXTRA: --enable-assets --bf16-unet|' \
+       "$REPO"/compose-dgx_spark.yaml 2>/dev/null || true
+
 # Publish ComfyUI on loopback only. It has no authentication of its own and custom nodes run
 # arbitrary code, so the LAN must reach it solely through nginx's mutual-TLS front door
 # (45-nginx.sh). Docker's default 0.0.0.0 binding is what exposes it. Idempotent.
