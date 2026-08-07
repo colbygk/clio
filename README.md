@@ -99,4 +99,6 @@ docs/                     state (LIVE deployment snapshot), usage (how to use th
   `/GDRDMA` is normal. ~22–24 GB/s/cable realistic.
 - **MXFP4 (GPT-OSS-120B)** needs the `vllm-node-mxfp4` image + CUTLASS backend, or output is broken
   on stock vLLM.
-- urania's management is on **WiFi** today — works, but wire it for robustness (`docs/networking.md`).
+- The management LAN runs **MTU 9000** (jumbo) across ceres/clio/urania on one USW Flex XG.
+  Beware: **macOS `ping` cannot send datagrams over 8192 bytes** and reports a healthy jumbo path as
+  broken — test from the Linux side (`docs/networking.md`).

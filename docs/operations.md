@@ -253,4 +253,5 @@ models, the levers are all **single-box** — see [comfyui.md → Very large mod
 1. **`vllm-node-mxfp4` build failed** (exit 255) → `gpt-oss-120b` unavailable until rebuilt with full logging.
 2. **OFED/`apt` wedged** (cosmetic for us; fix to restore host `apt`).
 3. **ComfyUI** not yet runtime-tested; **sharded mode** not yet runtime-tested.
-4. **urania management on WiFi** — wire it for robustness (fabric is independent/unaffected).
+4. ~~urania management on WiFi~~ — **done**: wired 10Gbase-T, and the whole management LAN now
+   runs MTU 9000 (see [networking.md](networking.md)).

@@ -13,8 +13,10 @@ This is what "multiple 100G SFP112 links" means physically.
 | mlx5_2 | enP2p1s0f0np0 | 10.51.53.0/24 | .13 | .12 | configured by bootstrap |
 | mlx5_3 | enP2p1s0f1np1 | 10.51.51.0/24 | .13 | .12 | pre-existing |
 
-Management (how ceres reaches the boxes, by mDNS name): clio `10.10.10.149` (1GbE wired),
-urania `10.10.10.39` (**WiFi** — wired port has no cable; see caveat below).
+Management (how ceres reaches the boxes): clio `clio.cgk.sh` / `10.10.10.149` and urania
+`urania.cgk.sh` / `10.10.10.155`, both **wired 10Gbase-T** into the USW Flex XG, both at **MTU
+9000**. (Earlier notes describing clio as 1GbE and urania as WiFi at `.39` are obsolete — corrected
+2026-08-07.)
 
 ## What `10-network.sh` changes
 
@@ -86,13 +88,39 @@ a while, like it was merely busy.
    across reboots). It happens to be 9000 already.
 3. **The nodes.** `clusterctl lan-mtu 9000`, then set `LAN_MTU=9000` in `cluster/inventory.env` so
    `10-network.sh` stops warning.
-4. Confirm: `ping -c3 -D -s 8972 clio.cgk.sh` — with `-D` (don't fragment), an 8972-byte payload
-   only survives if every hop really carries the frame.
+4. Confirm **from a node, not from the Mac** (see the next section for why):
+   `ssh clio.cgk.sh 'ping -c3 -M do -s 8972 10.10.10.123'` — with DF set, an 8972-byte payload
+   only survives if every hop really carries the frame. A bulk TCP transfer is the other good check.
 
 `clusterctl lan-mtu` applies the change **live with an auto-revert timer armed**, sends a full-size
 DF ping, and persists only if that packet survives; otherwise the node puts itself back. That
 matters because the interface you would use to undo a bad MTU is the one it breaks. Every host on
 the segment — including any other machine plugged into that switch — must agree.
+
+### Considered: a dedicated jumbo VLAN (10.10.20.0/24)
+
+Not done, and not required — jumbo works today on the flat `10.10.10.0/24`. Recorded because the
+reasoning is worth keeping.
+
+**The argument for it.** MTU is a property of a *broadcast domain*, not of a switch. `10.10.10.0/24`
+spans the UDW's other ports too, where everything else is at 1500, so the segment is genuinely
+mixed. That is mostly survivable — TCP negotiates MSS down, and the UDW is a *router*, so unlike a
+switch it does send the ICMP "fragmentation needed" that makes path-MTU discovery work — but it is
+fragile for UDP and for anything that assumes it can emit a full-size frame. A dedicated VLAN
+guarantees every host in the domain agrees on 9000, which is the standard shape for a storage or
+compute segment.
+
+**The argument against.** It buys robustness, not speed; the three hosts that matter are already
+verified at 9000; and the migration touches more than it first appears.
+
+**If you do it, the work is:**
+1. UniFi: new network/VLAN + DHCP scope, assign the USW Flex XG ports to it.
+2. Re-IP clio, urania and ceres's `en0`; update `LAN_GATEWAY` in `cluster/inventory.env`.
+3. **Re-issue the server certificates.** They carry IP SANs (`10.10.10.149`, `10.10.10.155`), so
+   they stop matching: `clio-pki server clio && clio-pki server urania && clusterctl nginx deploy`.
+4. DNS re-points itself once UniFi reports the new addresses (cgk-dns-sync).
+5. Leave the fabric alone — `10.51.50–53.x` is direct-attach, off the LAN entirely, and the NFS
+   export ACL is written against fabric IPs, so none of it is affected.
 
 ### Do not test jumbo with macOS `ping`
 
@@ -115,7 +143,7 @@ or with an actual TCP transfer. `clusterctl lan-mtu` now runs its probe on the n
 `$SSH_CLIENT`, for exactly this reason. Ceiling on this Mac, for reference: payload 8164 is the
 largest that works (8164 + 8 ICMP + 20 IP = 8192 exactly).
 
-## Caveat worth fixing: urania management is on WiFi
-urania's wired management port (`enP7s7`) has no carrier, so ceres reaches it over WiFi (~300 ms
-latency observed). Fine for low-bandwidth control, but for robustness put urania on wired
-management. The 200G fabric between the boxes is independent and unaffected.
+## Resolved: urania management is now wired
+urania used to be reachable only over WiFi (`wlP9s9`, ~300 ms) because its wired port had no
+carrier. It is now on `enP7s7` at 10Gbase-T, same as clio, and `wlP9s9` is down. Nothing in the
+repo depends on the old `10.10.10.39` address.
