@@ -94,6 +94,27 @@ DF ping, and persists only if that packet survives; otherwise the node puts itse
 matters because the interface you would use to undo a bad MTU is the one it breaks. Every host on
 the segment — including any other machine plugged into that switch — must agree.
 
+### Do not test jumbo with macOS `ping`
+
+macOS cannot build an ICMP datagram larger than **8192 bytes**. Past that you get:
+
+```
+$ ping -D -s 8972 clio.cgk.sh
+ping: sendto: Message too long
+```
+
+That is `EMSGSIZE` raised **locally** — the packet never reaches the wire. It fires even with
+fragmentation allowed, and even though `route -n get` reports MTU 9000, because it is a limit of
+the raw-socket path in `ping`, not of the interface. The macOS *kernel* has no such problem: it
+answers an 8972-byte ping sent from a Linux host, and 800 MB TCP transfers run clean in both
+directions at MTU 9000.
+
+This cost real time on 2026-08-07: it made a correctly-configured jumbo network look broken and
+sent the investigation toward cabling. **Test from the Linux side** — `ping -M do -s 8972 <mac>` —
+or with an actual TCP transfer. `clusterctl lan-mtu` now runs its probe on the node, aimed back at
+`$SSH_CLIENT`, for exactly this reason. Ceiling on this Mac, for reference: payload 8164 is the
+largest that works (8164 + 8 ICMP + 20 IP = 8192 exactly).
+
 ## Caveat worth fixing: urania management is on WiFi
 urania's wired management port (`enP7s7`) has no carrier, so ceres reaches it over WiFi (~300 ms
 latency observed). Fine for low-bandwidth control, but for robustness put urania on wired

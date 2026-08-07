@@ -250,8 +250,17 @@ cmd_lan_mtu() {
     scp -q "${SSH_OPTS[@]}" "$REPO_ROOT/scripts/set-lan-mtu.sh" "$SSH_USER@$h:/tmp/set-lan-mtu.sh"
     on "$h" "sudo cp /tmp/set-lan-mtu.sh /opt/clio/scripts/ && sudo chmod +x /opt/clio/scripts/set-lan-mtu.sh
              sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/set-lan-mtu.sh $mtu" || { err "[$h] apply failed"; continue; }
-    # -D sets DF so the switch cannot paper over it by fragmenting; 28 bytes of IP+ICMP header.
-    if ping -c 3 -W 2 -D -s $((mtu - 28)) "$h" >/dev/null 2>&1; then
+    # Verify FROM THE NODE, pinging this machine back, rather than from here.
+    #
+    # macOS's ping cannot build an IP datagram larger than 8192 bytes — `sendto: Message too long`,
+    # a LOCAL EMSGSIZE that fires even with fragmentation allowed and even though the route reports
+    # MTU 9000. It is a limit of the raw-socket path in the ping utility, not of the interface: the
+    # macOS *kernel* happily emits 9014-byte frames (it answers a 8972-byte ping from a node, and
+    # 800 MB TCP transfers run clean at MTU 9000). Testing from here therefore fails every jumbo
+    # check on a Mac and reports a healthy network as broken. Linux's ping has no such cap, so the
+    # node pings back to $SSH_CLIENT — same wire, same frame size, trustworthy answer.
+    local probe="ping -c 3 -W 2 -M do -s $((mtu - 28)) \$(echo \$SSH_CLIENT | awk '{print \$1}')"
+    if on "$h" "$probe >/dev/null 2>&1"; then
       say "[$h] full-size frame survives — committing"
       on "$h" "sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/set-lan-mtu.sh $mtu --commit"
     else
