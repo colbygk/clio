@@ -46,12 +46,26 @@ mint client certificates for the other one.
 clio-pki client colby-macbook        # prints the bundle path and its password
 ```
 
-**macOS** — double-click the `.p12` (imports into login keychain, prompts for the password), then
-trust the CA once:
+**macOS** — three steps, and the third is the one people miss:
 ```bash
+# 1. import the bundle — double-click the .p12 and enter the printed password
+# 2. trust the CA
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.clio/ca/ca.crt
+# 3. bind the identity to the sites, or the browser will not offer it
+security set-identity-preference -s "https://clio.cgk.sh"   -c "<name>"
+security set-identity-preference -s "https://urania.cgk.sh" -c "<name>"
 ```
-Safari/Chrome will then offer the client certificate when you visit the site.
+Then **fully quit and reopen the browser** — Chrome and Safari cache the "no certificate" outcome
+per origin, so a reload alone can keep showing the denied page after you have fixed it.
+
+Steps 1 and 2 alone are not enough. Without an identity preference macOS may simply never present
+the certificate, and the symptom is indistinguishable from having no certificate at all.
+
+*Do not be alarmed by this:* `security find-identity -v -p ssl-client` reports **0 valid
+identities** even when everything works, and `security verify-cert -c <client>.crt -p ssl -C` says
+`Invalid Extended Key Usage for policy` on a certificate whose EKU is exactly `clientAuth`. Both are
+quirks of the `security` CLI. The authoritative checks are `security find-identity -v` (which does
+list the identity) and the server's own access log.
 
 **iOS/iPadOS** — AirDrop or mail both `ca.crt` and the `.p12` to the device, install each under
 Settings → Profile Downloaded, then **Settings → General → About → Certificate Trust Settings** and
@@ -88,6 +102,17 @@ Two details that are load-bearing rather than cosmetic:
 scripts against these hosts sees a behaviour change — only the body text differs.
 
 ## Operating it
+
+**Diagnosing a denied page.** The access log on the node says which half is wrong — this is the
+first thing to look at, not the last:
+```bash
+ssh clio.cgk.sh 'sudo tail /var/log/nginx/comfyui.access.log'
+#   verify=NONE      -> the browser offered no certificate (enrolment/identity-preference problem)
+#   verify=FAILED:.. -> it offered one this host will not accept (wrong CA, expired)
+#   verify=SUCCESS   -> mutual TLS is fine; any error is beyond the gate
+```
+nginx only reports the distinction in its *error* log at `info` level, which is far too noisy to
+leave enabled, so the access log carries `$ssl_client_verify` instead.
 
 ```bash
 clio-pki list                     # everything issued, and when it expires

@@ -46,7 +46,7 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options "nosniff" always;
 
-    access_log /var/log/nginx/comfyui.access.log;
+    access_log /var/log/nginx/comfyui.access.log mtls;
     error_log  /var/log/nginx/comfyui.error.log;
 
     # ---- styled error pages (see cluster/nginx/errors/) ----

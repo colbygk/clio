@@ -109,6 +109,15 @@ subjectAltName=email:$name@$DOMAIN"
   say "Bundle:   $p12"
   say "Password: $pw"
   echo "   (also saved to $pwfile)"
+  # The step everyone forgets. Without an identity preference macOS may never present the
+  # certificate, and the browser shows the denied page exactly as if none were installed.
+  cat <<EOF
+
+   On macOS, after importing the .p12 and trusting the CA:
+     security set-identity-preference -s "https://clio.cgk.sh"   -c "$name"
+     security set-identity-preference -s "https://urania.cgk.sh" -c "$name"
+   then fully quit and reopen the browser (it caches the 'no certificate' result per site).
+EOF
 }
 
 # NOTE on revocation: nginx's ssl_crl needs a CRL that must be regenerated and redeployed before

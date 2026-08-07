@@ -62,6 +62,13 @@ map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
 }
+
+# Log whether a client certificate was offered and what happened to it. Without this, a 400 is
+# ambiguous — "browser sent nothing" and "browser sent something we rejected" look identical, and
+# nginx only says which at `info` level, far too noisy to leave on. $ssl_client_verify is one of
+# NONE (none offered), SUCCESS, or FAILED:<reason>.
+log_format mtls '$remote_addr verify=$ssl_client_verify dn="$ssl_client_s_dn" '
+                '[$time_local] "$request" $status $body_bytes_sent "$http_user_agent"';
 EOF
 
 # Error pages, styled to match https://cgk.sh. The shared CSS is injected into each page at the
