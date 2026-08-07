@@ -61,6 +61,26 @@ per origin, so a reload alone can keep showing the denied page after you have fi
 Steps 1 and 2 alone are not enough. Without an identity preference macOS may simply never present
 the certificate, and the symptom is indistinguishable from having no certificate at all.
 
+### If the browser says ERR_ADDRESS_UNREACHABLE
+
+That is **not** a certificate problem — the request never reached the node, so nothing appears in
+its access log. Seen 2026-08-07: Chrome had auto-updated 150 → 151 **on disk while the old process
+kept running**, and the stale instance could not reach the LAN at all, while `curl` from a terminal
+worked fine the whole time.
+
+The fix is a *genuine* full quit. Chrome keeps background processes alive, so closing the windows
+is not enough — Cmd-Q, then confirm:
+
+```bash
+pgrep -fl "Google Chrome"    # must print nothing before you relaunch
+```
+
+Two things that look like the cause and are not: a dozen enabled "Google Chrome" entries under
+System Settings → Privacy & Security → **Local Network** is normal (one per updated binary), and
+`chrome://net-internals/#dns` showing the right address only proves resolution, not reachability.
+The quickest discriminator is to open the UniFi UI or any other LAN address — if that fails too,
+the browser has no LAN access and the cluster is not involved.
+
 *Do not be alarmed by this:* `security find-identity -v -p ssl-client` reports **0 valid
 identities** even when everything works, and `security verify-cert -c <client>.crt -p ssl -C` says
 `Invalid Extended Key Usage for policy` on a certificate whose EKU is exactly `clientAuth`. Both are
