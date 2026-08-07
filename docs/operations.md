@@ -109,6 +109,26 @@ All commands run on **ceres** as `clusterctl <verb>` (installed via `ceres/insta
 `~/.local/bin/clusterctl`). Each verb's under-the-hood mechanics and manual equivalent are given so you
 can operate it even if `clusterctl` isn't handy.
 
+### `clusterctl preflight [node]`
+What `bootstrap` checks before it touches anything; safe to run any time. Two guards, both added
+after this repo lost track of reality twice:
+
+- **Destination safety.** `rsync_repo` syncs with `--delete`, and `/opt/clio` is a shared namespace:
+  the bootstrap scripts `git clone` `comfyui-docker/` (the whole ComfyUI basedir — models, LoRAs,
+  workflows) and `spark-vllm-docker/` into it, neither of which is in this repo. They are protected
+  by the `RSYNC_PROTECT` list. The guard then refuses to sync if `/opt/clio` holds **any other**
+  mountpoint or git checkout, so a future script that clones somewhere new is caught rather than
+  silently wiped. This matters most on clio, whose `basedir/models` is an **NFS mount of urania** —
+  rsync does not stop at filesystem boundaries, so deleting through it would destroy urania's data.
+- **Dirty working tree.** `bootstrap` deploys the **working tree, not `HEAD`**. That is deliberate
+  (it lets you test before committing) but it is how the gateway's split routing ran on the nodes
+  for seven weeks while the repo described something else. `bootstrap` now lists uncommitted changes
+  under `cluster/` and `scripts/` and asks before continuing; `CLIO_ALLOW_DIRTY=1` skips the prompt.
+
+> **`--dry-run` is not a safety check on ceres.** macOS ships **openrsync**, which prints no
+> `deleting` lines even with `-n -v` — a dry run there reports zero deletions while the real run
+> removes the tree. Preview from a node (real rsync 3.x), or trust `preflight` instead.
+
 ### `clusterctl status`
 Health of both nodes (GPU, services, fabric `active_mtu`) + gateway health.
 *Under the hood:* SSHes each node for `nvidia-smi`, `systemctl is-active`, `ibv_devinfo`; curls the
