@@ -91,13 +91,14 @@ done
 MGMT_IFACE=$(ip -4 -o route get 10.10.10.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
 if [ -n "${MGMT_IFACE:-}" ]; then
   MGMT_MTU=$(cat "/sys/class/net/$MGMT_IFACE/mtu" 2>/dev/null || echo "?")
-  if [ "$MGMT_MTU" != "1500" ]; then
-    warn "management interface $MGMT_IFACE has MTU $MGMT_MTU (expected 1500)."
-    warn "  On a 1500 LAN this black-holes large packets: ssh hangs, TLS fails after the cert."
-    warn "  Fix: sudo nmcli con mod \"\$(nmcli -g GENERAL.CONNECTION dev show $MGMT_IFACE)\" 802-3-ethernet.mtu 1500"
+  if [ "$MGMT_MTU" != "${LAN_MTU:-1500}" ]; then
+    warn "management interface $MGMT_IFACE has MTU $MGMT_MTU (inventory says LAN_MTU=${LAN_MTU:-1500})."
+    warn "  A host MTU above what the switch forwards black-holes large packets: ssh hangs, TLS"
+    warn "  fails after the certificate. Every host on the LAN must agree, switch included."
+    warn "  Fix safely from ceres: clusterctl lan-mtu ${LAN_MTU:-1500}"
     ok=0
   else
-    echo "  mgmt $MGMT_IFACE mtu=1500 (correct — jumbo is fabric-only)"
+    echo "  mgmt $MGMT_IFACE mtu=$MGMT_MTU (matches LAN_MTU; jumbo above this is fabric-only)"
   fi
 fi
 

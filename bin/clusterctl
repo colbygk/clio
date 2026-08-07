@@ -11,6 +11,7 @@
 #   clusterctl mode <node> [role]   show/set a node's role: llm | comfy | off (they are exclusive)
 #   clusterctl comfyui up|down      start/stop ComfyUI on both nodes
 #   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
+#   clusterctl lan-mtu <mtu> [node] change management-LAN MTU, verified before it is persisted
 #   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
 #   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
 #
@@ -220,6 +221,47 @@ cmd_comfyui() {
   esac
 }
 
+# Change the management-LAN MTU on the nodes, verifying before persisting.
+#
+# Order matters and the tool enforces the safe half: each node gets the new MTU LIVE ONLY, with a
+# timer armed to undo it. ceres then sends a DF-set ping at the full new size. Only if that packet
+# survives the round trip does the change get committed and persisted; otherwise the node reverts
+# itself and nothing is left broken. This is the failure that took urania off the network on
+# 2026-08-07 — cheap to cause, expensive to fix blind.
+#
+# The half the tool CANNOT do: the switch must forward the frames first (UniFi ships with Jumbo
+# Frames off), and ceres's own en0 must match, or the verification ping fails for the wrong reason.
+cmd_lan_mtu() {
+  local mtu=${1:?"lan-mtu <mtu> [clio|urania]"} which=${2:-all} hosts=("${NODES[@]}")
+  case "$which" in
+    clio) hosts=("$CLIO_MGMT");; urania) hosts=("$URANIA_MGMT");; all) ;;
+    *) die "lan-mtu <mtu> [clio|urania]";;
+  esac
+
+  local mine
+  mine=$(ifconfig "$(route -n get "${hosts[0]}" 2>/dev/null | awk '/interface:/{print $2}')" 2>/dev/null | awk '/mtu/{for(i=1;i<=NF;i++) if($i=="mtu") print $(i+1)}' | head -1)
+  if [ -n "${mine:-}" ] && [ "$mine" -lt "$mtu" ] 2>/dev/null; then
+    err "this machine's own interface is MTU $mine, below the $mtu you are setting."
+    die "The verification ping could not succeed. Raise it first (macOS: sudo ifconfig <if> mtu $mtu)."
+  fi
+
+  for h in "${hosts[@]}"; do
+    say "[$h] applying MTU $mtu (live, auto-revert armed)"
+    scp -q "${SSH_OPTS[@]}" "$REPO_ROOT/scripts/set-lan-mtu.sh" "$SSH_USER@$h:/tmp/set-lan-mtu.sh"
+    on "$h" "sudo cp /tmp/set-lan-mtu.sh /opt/clio/scripts/ && sudo chmod +x /opt/clio/scripts/set-lan-mtu.sh
+             sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/set-lan-mtu.sh $mtu" || { err "[$h] apply failed"; continue; }
+    # -D sets DF so the switch cannot paper over it by fragmenting; 28 bytes of IP+ICMP header.
+    if ping -c 3 -W 2 -D -s $((mtu - 28)) "$h" >/dev/null 2>&1; then
+      say "[$h] full-size frame survives — committing"
+      on "$h" "sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/set-lan-mtu.sh $mtu --commit"
+    else
+      err "[$h] a $mtu-byte frame did NOT get through. Leaving it to auto-revert."
+      err "     Enable Jumbo Frames on the UniFi switch, then re-run. No change persisted."
+    fi
+  done
+  say "Current: $(for h in "${hosts[@]}"; do printf '%s=%s ' "${h%%.*}" "$(on "$h" 'cat /sys/class/net/$(ip -4 -o route get '"${LAN_GATEWAY:-10.10.10.1}"' | awk "{for(i=1;i<=NF;i++) if(\$i==\"dev\") print \$(i+1)}")/mtu' 2>/dev/null)"; done)"
+}
+
 # Push the node's HTTPS cert + the CA cert (for verifying clients) and (re)configure nginx.
 # The CA PRIVATE key stays on ceres — a node never needs it and should never hold it.
 cmd_nginx() {
@@ -318,6 +360,7 @@ case "${1:-}" in
   mode)      shift; cmd_mode "$@";;
   comfyui)   shift; cmd_comfyui "$@";;
   nginx)     shift; cmd_nginx "$@";;
+  lan-mtu)   shift; cmd_lan_mtu "$@";;
   nccl-test) cmd_nccl_test;;
   logs)      shift; cmd_logs "$@";;
   *) sed -n '2,20p' "$0"; exit 1;;

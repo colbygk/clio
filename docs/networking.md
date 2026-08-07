@@ -63,6 +63,37 @@ clusterctl nccl-test     # ib_write_bw across a rail; ~190 Gb/s aggregate target
   current `-1018` kernel today.)
 - **Multi-node hang with no error**: NCCL 2.30.4 NVLS regression → `NCCL_NVLS_ENABLE=0` (already set).
 
+## The management LAN — two different MTU worlds
+
+Do not confuse the two networks. The **fabric** (4×200G ConnectX-7, direct cable, no switch) runs
+MTU 9000 and that is what lifts RoCE `active_mtu` to 4096. The **management LAN** is a separate
+thing: ceres (10.10.10.123), clio (.149) and urania (.155) all sit on one **USW Flex XG** at
+10Gbase-T, and its MTU is whatever that switch is configured to forward.
+
+**The trap.** UniFi ships with **Jumbo Frames disabled**. A host set to MTU 9000 on a 1500 switch
+does not fail cleanly — the TCP handshake succeeds because SYN packets are small, and then anything
+larger is dropped by a layer-2 switch that sends no ICMP "fragmentation needed", so path-MTU
+discovery never engages. The result reads as "the machine is flaky": SSH connects then hangs, HTTPS
+dies right after the certificate. urania sat in exactly this state until 2026-08-07 and looked, for
+a while, like it was merely busy.
+
+**Raising the LAN to 9000, in the only safe order:**
+
+1. **Switch first.** UniFi Network → Settings → Networks → *Global Switch Settings* → enable
+   **Jumbo Frames**. This re-provisions the switches, so expect a brief blip. Nothing else works
+   until this is done — the USW Flex XG supports it, it is just off by default.
+2. **ceres.** `sudo ifconfig en0 mtu 9000` (persist via a Network location/profile if you want it
+   across reboots). It happens to be 9000 already.
+3. **The nodes.** `clusterctl lan-mtu 9000`, then set `LAN_MTU=9000` in `cluster/inventory.env` so
+   `10-network.sh` stops warning.
+4. Confirm: `ping -c3 -D -s 8972 clio.cgk.sh` — with `-D` (don't fragment), an 8972-byte payload
+   only survives if every hop really carries the frame.
+
+`clusterctl lan-mtu` applies the change **live with an auto-revert timer armed**, sends a full-size
+DF ping, and persists only if that packet survives; otherwise the node puts itself back. That
+matters because the interface you would use to undo a bad MTU is the one it breaks. Every host on
+the segment — including any other machine plugged into that switch — must agree.
+
 ## Caveat worth fixing: urania management is on WiFi
 urania's wired management port (`enP7s7`) has no carrier, so ceres reaches it over WiFi (~300 ms
 latency observed). Fine for low-bandwidth control, but for robustness put urania on wired
