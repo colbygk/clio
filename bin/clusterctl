@@ -13,6 +13,7 @@
 #   clusterctl comfyui up|down      start/stop ComfyUI on both nodes
 #   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
 #   clusterctl lan-mtu <mtu> [node] change management-LAN MTU, verified before it is persisted
+#   clusterctl freemem [node]       drop page cache — it counts against GPU memory on GB10
 #   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
 #   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
 #
@@ -389,6 +390,20 @@ cmd_nginx() {
   esac
 }
 
+# Page cache counts against GPU-visible memory on GB10 (vram_free == ram_free), so a box that has
+# been reading models can refuse a load while looking like it has plenty free. Reclaim it without
+# restarting anything.
+cmd_freemem() {
+  local which=${1:-all} hosts=("${NODES[@]}")
+  case "$which" in clio) hosts=("$CLIO_MGMT");; urania) hosts=("$URANIA_MGMT");; all) ;; *) die "freemem [clio|urania]";; esac
+  for h in "${hosts[@]}"; do
+    on "$h" 'b=$(free -g | awk "/^Mem:/{print \$6}"); sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null; sleep 1
+             a=$(free -g | awk "/^Mem:/{print \$4}")
+             echo "  cache freed: ${b} GiB -> free now ${a} GiB"'
+  done
+  say "Reclaimed. Re-check what ComfyUI sees: curl .../system_stats | jq .devices[0].vram_free"
+}
+
 cmd_status() {
   for h in "${NODES[@]}"; do
     echo "── $h ──"
@@ -443,6 +458,7 @@ case "${1:-}" in
   nginx)     shift; cmd_nginx "$@";;
   lan-mtu)   shift; cmd_lan_mtu "$@";;
   preflight) shift; cmd_preflight "$@";;
+  freemem)   shift; cmd_freemem "$@";;
   nccl-test) cmd_nccl_test;;
   logs)      shift; cmd_logs "$@";;
   *) sed -n '2,20p' "$0"; exit 1;;

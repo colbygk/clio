@@ -18,6 +18,13 @@ RequiresMountsFor=__REPO__/basedir/models __REPO__/basedir/input
 
 [Service]
 Type=simple
+# On GB10 the GPU and CPU share one memory pool, and CUDA reports free VRAM as free SYSTEM memory:
+# vram_free tracks ram_free exactly. Page cache therefore counts AGAINST the GPU. Reading models
+# across the NFS share fills cache with tens of GiB, and the next model load fails on its FIRST
+# allocation with "Allocation on device 0 would exceed allowed memory" while `free` still shows
+# ~89 GiB "available" — the allocator does not force reclaim. Start from a clean slate; the cost is
+# re-reading the models, ~7s for 10 GiB over RDMA.
+ExecStartPre=/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
 WorkingDirectory=__REPO__
 ExecStart=/usr/bin/docker compose -f __COMPOSE_FILE__ up
 ExecStop=/usr/bin/docker compose -f __COMPOSE_FILE__ down
