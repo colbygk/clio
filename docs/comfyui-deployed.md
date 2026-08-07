@@ -10,6 +10,14 @@ Concepts + model fit are in [comfyui.md](comfyui.md); large-model strategy in
 > historical. See [security.md](security.md). Never port-forward any of this: ComfyUI custom nodes
 > run arbitrary code, and an Apr-2026 botnet hit exposed instances.
 
+> **After the switch to HTTPS, your workflow tabs will look empty.** Nothing is lost. Saved
+> workflows live on the server (`basedir/user/default/workflows/`, `"storage": "server"`), but the
+> *open tab* state is browser `localStorage`, which is **per-origin** — and
+> `https://urania.cgk.sh` is a different origin from the old `http://10.10.10.155:8188`. Open the
+> Workflows sidebar and they are all there. Confirm from outside the browser with:
+> `curl --cacert ~/.clio/ca/ca.crt --cert ~/.clio/ca/certs/<name>.crt --key ~/.clio/ca/private/<name>.key`
+> `  'https://urania.cgk.sh/api/userdata?dir=workflows&recurse=true&split=false&full_info=true'`
+
 ## Which node runs it
 - **urania** is ComfyUI-only — nothing competes for its memory. It also **owns the model store**,
   which clio mounts ([comfyui-shared-store.md](comfyui-shared-store.md)); if urania is down,
