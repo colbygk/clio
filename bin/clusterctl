@@ -13,7 +13,7 @@
 #   clusterctl comfyui up|down      start/stop ComfyUI on both nodes
 #   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
 #   clusterctl lan-mtu <mtu> [node] change management-LAN MTU, verified before it is persisted
-#   clusterctl freemem [node]       drop page cache — it counts against GPU memory on GB10
+#   clusterctl freemem [node]       drop page cache (diagnostic; rarely the fix — see docs)
 #   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
 #   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
 #
@@ -390,9 +390,12 @@ cmd_nginx() {
   esac
 }
 
-# Page cache counts against GPU-visible memory on GB10 (vram_free == ram_free), so a box that has
-# been reading models can refuse a load while looking like it has plenty free. Reclaim it without
-# restarting anything.
+# Drop page cache. Keep expectations low: page cache is RECLAIMABLE — the kernel evicts it under
+# pressure and counts it in MemAvailable — so this frees nothing the allocator could not already
+# have taken, and it discards cached model weights that make model reuse fast. ComfyUI's system_stats
+# reports vram_free derived from free system memory, which makes cache LOOK like it is consuming the
+# GPU; that is a reporting artifact, not the allocator's constraint. Kept as a diagnostic for
+# isolating genuine pressure from something else. For allocation failures, restart ComfyUI instead.
 cmd_freemem() {
   local which=${1:-all} hosts=("${NODES[@]}")
   case "$which" in clio) hosts=("$CLIO_MGMT");; urania) hosts=("$URANIA_MGMT");; all) ;; *) die "freemem [clio|urania]";; esac

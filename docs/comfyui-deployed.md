@@ -18,6 +18,35 @@ Concepts + model fit are in [comfyui.md](comfyui.md); large-model strategy in
 > `curl --cacert ~/.clio/ca/ca.crt --cert ~/.clio/ca/certs/<name>.crt --key ~/.clio/ca/private/<name>.key`
 > `  'https://urania.cgk.sh/api/userdata?dir=workflows&recurse=true&split=false&full_info=true'`
 
+### Troubleshooting: `torch.OutOfMemoryError` with memory clearly free
+
+Seen 2026-08-07 on both nodes at once. The tell is in the numbers, not the exception:
+
+```
+Free (according to CUDA): 89.74 GiB
+                        : 17179869184.00 GiB     <- the REQUESTED allocation
+Device limit            : 119.69 GiB
+torch.OutOfMemoryError: Allocation on device 0 would exceed allowed memory
+```
+
+**17,179,869,184 GiB is 2^34 GiB — exactly 2^64 bytes.** That is a wrapped/negative size, not a
+shortage; it failed with `Currently allocated: 0 bytes` and 93 GiB genuinely free (`MemFree`, not
+merely `MemAvailable`). The traceback ends in `model_patcher.py` `_load_list` moving a text-encoder
+parameter to the device, under `partially_load`.
+
+**Fix: restart ComfyUI** (`clusterctl mode <node> comfy`, or `systemctl restart clio-comfyui`).
+Both nodes generated normally immediately afterwards.
+
+**Do not chase page cache.** It is reclaimable — the kernel evicts it under pressure and counts it
+in `MemAvailable` — so it cannot starve an allocation. ComfyUI reports `vram_free` derived from
+free *system* memory, so cache makes it look like the GPU is full; that is a reporting artifact.
+This was misdiagnosed here first, and dropping caches only slowed model reuse.
+
+Root cause of the bad size is still unknown. The image runs NVIDIA's **`comfy-aimdo`** shim
+(`DynamicVRAM`, `Enabled pinned memory 110309.0`, async weight offload, `GPU RAM headroom 7660 MB`)
+which hooks CUDA allocation and is what emits "allowed memory". If it recurs, capture the full
+traceback plus `/system_stats` **before** restarting — the restart destroys the evidence.
+
 ## Which node runs it
 - **urania** is ComfyUI-only — nothing competes for its memory. It also **owns the model store**,
   which clio mounts ([comfyui-shared-store.md](comfyui-shared-store.md)); if urania is down,
