@@ -1,0 +1,288 @@
+#!/usr/bin/env python3.11
+"""sheet — build a character's model sheet on the Sparks, one directed view at a time.
+
+    sheet status   cat                          what's approved, what's runnable, what's blocked
+    sheet run      cat body_biped_front         4 draft candidates of that view (3eye)
+    sheet run      cat head_front@2eye          a 2eye view (derived from its approved 3eye image)
+    sheet run      cat expr_sad --note "one ear up, one down" --sketch ~/Desktop/sad.png
+    sheet run      cat --all                    every runnable, unapproved view
+    sheet run      cat body_biped_front --outline sticker_extremities   A/B a style option
+    sheet approve  cat body_biped_front 1234    make candidate seed 1234 the canonical view
+    sheet export-ui                             put cat_model_sheet in both nodes' Workflows menu
+
+Direction comes from character.toml (edit the view's prompt to re-direct it), plus per-run
+--note (extra words) and --sketch (your drawing, passed as an extra reference image). Candidates
+land in ComfyUI's output/ (browse them at https://urania.cgk.sh/outputs/) and are copied to the
+package's candidates/ (gitignored). Every candidate's full recipe is appended to runs.jsonl, and
+ComfyUI embeds the graph in each PNG, so any take can be regenerated exactly.
+"""
+import argparse
+import json
+import random
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import tomllib
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline import graphs  # noqa: E402
+from pipeline.comfy import Comfy, inventory, to_ui  # noqa: E402
+
+CHARS = REPO / "projects/cat/characters"
+
+
+def png_size(p: Path):
+    w, h = struct.unpack(">II", p.read_bytes()[16:24])
+    return w, h
+
+
+def megapixel_canvas(w, h):
+    """The reference is scaled to ~1 MP before encoding; an output canvas of a different scale
+    makes the model crop or zoom. So derived views render at the reference's aspect, ~1 MP."""
+    if w % 16 == 0 and h % 16 == 0 and 0.8 <= w * h / 2**20 <= 1.25:
+        return w, h   # already a sheet-sized canvas (e.g. an approved 896x1152): keep it exact
+    k = (1024 * 1024 / (w * h)) ** 0.5
+    return round(w * k / 16) * 16, round(h * k / 16) * 16
+
+
+def count_eyes(p: Path):
+    """Count eyes: white blobs enclosed by black, reasonably solid, and at least 40% the size of
+    the biggest one (so the nose, mouth and overlap lines don't count). A heuristic flag for the
+    reviewer, tuned on this design — not a verdict. None if ImageMagick is missing."""
+    w, h = png_size(p)
+    try:
+        out = subprocess.run(
+            ["magick", str(p), "-colorspace", "gray", "-threshold", "50%",
+             "-define", "connected-components:verbose=true",
+             "-define", f"connected-components:area-threshold={w * h // 1000}",
+             "-connected-components", "8", "null:"], capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        return None
+    blobs = []
+    for line in out.splitlines()[1:]:
+        f = line.split()
+        bw, bh, x, y = map(int, f[1].replace("+", "x").split("x"))
+        area = int(f[3])
+        if "255" in f[-1] and x > 0 and y > 0 and x + bw < w and y + bh < h and area / (bw * bh) > 0.3:
+            blobs.append(area)
+    return sum(a >= 0.4 * max(blobs) for a in blobs) if blobs else 0
+
+
+class Package:
+    def __init__(self, cid):
+        self.dir = CHARS / cid
+        if not (self.dir / "character.toml").exists():
+            sys.exit(f"no character package at {self.dir}")
+        self.spec = tomllib.loads((self.dir / "character.toml").read_text())
+        self.id = self.spec["character"]["id"]
+        self.views = {v["id"]: v for v in self.spec["views"]}
+        self.variants = self.spec["variants"]
+        self.base = next(k for k, v in self.variants.items() if "derive_from" not in v)
+        self.state_file = self.dir / "approved.json"
+        self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
+
+    def approved(self, view, variant):
+        if view == "head_front" and variant == self.base:
+            return self.dir / self.spec["character"]["source"]
+        rel = self.state.get(variant, {}).get(view)
+        return self.dir / rel if rel else None
+
+    def resolve_ref(self, ref, variant):
+        if ref == "source":
+            return self.dir / self.spec["character"]["source"]
+        if ref.startswith("@"):
+            return self.approved(ref[1:], variant)
+        return self.dir / ref   # a file in the package, e.g. ref/style_outline_....png
+
+    def job(self, view, variant, outline=None):
+        """Return (prompt, negative, ref paths, size) for view@variant, or raise Blocked."""
+        v, var, style = self.views[view], self.variants[variant], self.spec["style"]
+        if "derive_from" in var:
+            src = self.approved(view, var["derive_from"])
+            if not src:
+                raise Blocked(f"needs {view}@{var['derive_from']} approved first")
+            return var["prompt"], var.get("negative", ""), [src], megapixel_canvas(*png_size(src))
+        if "prompt" not in v:
+            raise Blocked("nothing to generate (this view is the source drawing)")
+        refs = [self.resolve_ref(r, variant) for r in v.get("refs", ["source"])]
+        missing = [r for r, p in zip(v.get("refs", []), refs) if p is None]
+        if missing:
+            raise Blocked(f"needs {', '.join(m[1:] for m in missing)}@{variant} approved first")
+        neg = ", ".join(x for x in (style.get("negative"), var.get("negative")) if x)
+        outline = style.get("outlines", {}).get(outline or style.get("outline"), "")
+        text = " ".join(x for x in (v["prompt"], var.get("describe"), style["prompt"], outline) if x)
+        return text, neg, refs, tuple(v["size"])
+
+    def targets(self):
+        for view in self.views:
+            for variant in self.variants:
+                yield view, variant
+
+    def save_state(self):
+        self.state_file.write_text(json.dumps(self.state, indent=2, sort_keys=True) + "\n")
+
+
+class Blocked(Exception):
+    pass
+
+
+def parse_target(s, pkg):
+    view, _, variant = s.partition("@")
+    variant = variant or pkg.base
+    if view not in pkg.views:
+        sys.exit(f"unknown view {view!r}; views: {', '.join(pkg.views)}")
+    if variant not in pkg.variants:
+        sys.exit(f"unknown variant {variant!r}; variants: {', '.join(pkg.variants)}")
+    return view, variant
+
+
+def cmd_status(a):
+    pkg = Package(a.character)
+    for view, variant in pkg.targets():
+        ap = pkg.approved(view, variant)
+        cands = list((pkg.dir / "candidates" / variant / view).glob("*.png"))
+        if ap:
+            st = f"approved  {ap.relative_to(pkg.dir)}"
+        else:
+            try:
+                pkg.job(view, variant)
+                st = "runnable"
+            except Blocked as e:
+                st = f"blocked   {e}"
+        extra = f"  ({len(cands)} candidates)" if cands else ""
+        print(f"  {view + '@' + variant:28} {st}{extra}")
+
+
+def cmd_run(a):
+    pkg = Package(a.character)
+    if a.all:
+        todo = []
+        for view, variant in pkg.targets():
+            if pkg.approved(view, variant):
+                continue
+            try:
+                pkg.job(view, variant)
+                todo.append((view, variant))
+            except Blocked:
+                pass
+    else:
+        if not a.target:
+            sys.exit("give a view (e.g. body_biped_front or head_front@2eye) or --all")
+        todo = [parse_target(a.target, pkg)]
+    if not todo:
+        print("nothing runnable — approve something, or see `sheet status`")
+        return
+    runs = pkg.dir / "runs.jsonl"
+    with Comfy(a.node) as c:
+        have = set(c.choices("UNETLoader", "unet_name"))
+        if graphs.QWEN_EDIT["unet"] not in have:
+            sys.exit(f"{graphs.QWEN_EDIT['unet']} is not on {a.node} yet (still downloading?)")
+        for view, variant in todo:
+            try:
+                if a.outline and a.outline not in pkg.spec["style"].get("outlines", {}):
+                    sys.exit(f"unknown outline {a.outline!r}; options: {', '.join(pkg.spec['style']['outlines'])}")
+                prompt, neg, refs, (w, h) = pkg.job(view, variant, a.outline)
+            except Blocked as e:
+                sys.exit(f"{view}@{variant} is blocked: {e}")
+            if a.sketch:
+                if len(refs) >= 3:
+                    sys.exit("Qwen edit takes at most 3 images; this view already uses 3")
+                refs.append(Path(a.sketch).expanduser())
+                prompt += f" Use the pose and composition of the rough sketch in image {len(refs)}, drawn in the style of image 1."
+            if a.note:
+                prompt += f" {a.note}"
+            names = [c.upload(r, subfolder=f"{pkg.id}/refs", name=f"{r.parent.name}_{r.name}") for r in refs]
+            seeds = [a.seed] if a.seed is not None else [random.randrange(1, 2**31) for _ in range(a.n)]
+            for seed in seeds:
+                prefix = f"{pkg.id}/{variant}/{view}/{view}_s{seed}"
+                loras = [tuple(x) for x in pkg.views[view].get("loras", [])]
+                g, _ = graphs.qwen_edit(prompt, names, seed, w, h, prefix, quality=a.quality, negative=neg, loras=loras)
+                t0 = time.time()
+                print(f"  {view}@{variant} seed {seed} ({a.quality}, {w}x{h}) ...", end="", flush=True)
+                imgs = c.wait(c.submit(g))
+                local = c.fetch(imgs[0], pkg.dir / "candidates" / variant / view / f"{seed}.png")
+                dt = time.time() - t0
+                eyes, want = count_eyes(local), pkg.variants[variant].get("eyes")
+                flag = "" if eyes is None or want is None else (f"  eyes={eyes}" + ("" if eyes == want else "  <-- WRONG EYE COUNT"))
+                print(f" {dt:.0f}s  {local.relative_to(REPO)}{flag}")
+                with runs.open("a") as f:
+                    f.write(json.dumps({
+                        "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "node": a.node, "view": view,
+                        "variant": variant, "seed": seed, "quality": a.quality, "size": [w, h],
+                        "prompt": prompt, "negative": neg, "note": a.note, "outline": a.outline or pkg.spec["style"].get("outline"),
+                        "refs": [str(r.relative_to(pkg.dir)) if r.is_relative_to(pkg.dir) else str(r) for r in refs],
+                        "models": graphs.QWEN_EDIT, "loras": pkg.views[view].get("loras", []), "output": imgs[0], "seconds": round(dt, 1), "eyes": eyes,
+                    }) + "\n")
+    print(f"review: open {pkg.dir.relative_to(REPO)}/candidates   (or https://{inventory()[a.node.upper() + '_MGMT']}/outputs/)")
+    print(f"then:   sheet approve {pkg.id} <view>[@variant] <seed>")
+
+
+def cmd_approve(a):
+    pkg = Package(a.character)
+    view, variant = parse_target(a.target, pkg)
+    cand = pkg.dir / "candidates" / variant / view / f"{a.seed}.png"
+    if not cand.exists():
+        sys.exit(f"no candidate {cand.relative_to(REPO)}")
+    dest = pkg.dir / "sheet" / variant / f"{view}.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(cand, dest)
+    pkg.state.setdefault(variant, {})[view] = str(dest.relative_to(pkg.dir))
+    pkg.state.setdefault("_seeds", {})[f"{view}@{variant}"] = a.seed
+    pkg.save_state()
+    print(f"approved {view}@{variant} = seed {a.seed} -> {dest.relative_to(REPO)}")
+    unblocked = []
+    for v2, var2 in pkg.targets():
+        if not pkg.approved(v2, var2):
+            try:
+                pkg.job(v2, var2)
+                unblocked.append(f"{v2}@{var2}")
+            except Blocked:
+                pass
+    if unblocked:
+        print("runnable now: " + ", ".join(unblocked))
+
+
+def cmd_export_ui(a):
+    """Write the model-sheet graph to both nodes' Workflows menu (workflows are node-local)."""
+    inv = inventory()
+    pkg = Package("cat")
+    prompt, neg, refs, (w, h) = pkg.job("body_biped_front", pkg.base)   # a real brief as the example
+    with Comfy("urania") as c:
+        names = [c.upload(r, subfolder=f"{pkg.id}/refs", name=f"{r.parent.name}_{r.name}") for r in refs]
+        g, titles = graphs.qwen_edit(prompt, names, 1, w, h, f"{pkg.id}/manual/sheet", negative=neg)
+        wf = to_ui(g, c.object_info(), titles)
+    out = REPO / "pipeline/workflows/cat_model_sheet.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(wf, indent=1))
+    dest = "/opt/clio/comfyui-docker/basedir/user/default/workflows/cat_model_sheet.json"
+    for node in ("urania", "clio"):
+        host = inv[f"{node.upper()}_MGMT"]
+        r = subprocess.run(["scp", "-q", "-o", "BatchMode=yes", "-i", inv["SSH_KEY"], str(out),
+                            f"{inv['SSH_USER']}@{host}:{dest}"], capture_output=True, text=True)
+        print(f"  {node}: {'ok' if r.returncode == 0 else 'FAILED ' + r.stderr.strip()}")
+    print("refresh the ComfyUI tab, then Workflows -> cat_model_sheet")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="sheet", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("status"); s.add_argument("character", nargs="?", default="cat"); s.set_defaults(f=cmd_status)
+    r = sub.add_parser("run"); r.add_argument("character"); r.add_argument("target", nargs="?")
+    r.add_argument("--all", action="store_true"); r.add_argument("-n", type=int, default=4)
+    r.add_argument("--seed", type=int); r.add_argument("--note"); r.add_argument("--sketch")
+    r.add_argument("--outline", help="A/B another [style.outlines] option for this run")
+    r.add_argument("--final", dest="quality", action="store_const", const="final", default="draft")
+    r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
+    ap = sub.add_parser("approve"); ap.add_argument("character"); ap.add_argument("target")
+    ap.add_argument("seed", type=int); ap.set_defaults(f=cmd_approve)
+    e = sub.add_parser("export-ui"); e.set_defaults(f=cmd_export_ui)
+    a = p.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

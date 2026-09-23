@@ -1,0 +1,12 @@
+{
+  "2eye": {
+    "head_front": "sheet/2eye/head_front.png"
+  },
+  "3eye": {
+    "body_biped_front": "sheet/3eye/body_biped_front.png"
+  },
+  "_seeds": {
+    "body_biped_front@3eye": 621705445,
+    "head_front@2eye": 791150487
+  }
+}

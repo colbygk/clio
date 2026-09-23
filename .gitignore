@@ -13,3 +13,6 @@ ca/
 # Local clones built on nodes
 spark-vllm-docker/
 comfyui-docker/
+# Animation pipeline: generated candidates are regenerable (runs.jsonl + PNG metadata); only approved sheet/ images are canon
+projects/*/characters/*/candidates/
+__pycache__/

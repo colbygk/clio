@@ -1,0 +1,173 @@
+# The cat — character package. This file is the director's brief for the model sheet: every
+# generation `bin/sheet` runs is assembled from it, so changing a word here is how a view gets
+# re-directed. Approvals are recorded by the tool in approved.json (don't hand-edit that).
+
+[character]
+id = "cat"
+name = "The cat"
+# The original drawing. It IS the approved 3-eye head_front; everything descends from it.
+source = "ref/head_front_3eye.png"
+
+[style]
+# Appended to every direction. Describes the look, not the pose.
+prompt = """Keep the exact drawing style of the reference: flat solid black ink shapes on a plain \
+white background, hand-drawn slightly uneven outlines, like a brush-pen drawing. No fur texture, \
+no shading, no gradients, no grey, no colour. Each eye is a white oval with one thin vertical black \
+slit pupil. Small white triangular nose with a short line beneath it. Thin black whiskers that \
+extend outside the head. Single character, \
+centred, whole figure visible, nothing cropped."""
+negative = "fur, hair texture, shading, gradient, grey, colour, realistic, 3d render, photo, text, watermark, multiple cats, cropped"
+
+# Outline treatment. `outline` picks the active option; `sheet run --outline <name>` A/B-tests
+# another for one run. Colby (2026-09-23): candidate 1845029838's outline is the right look — thin
+# white band + fine dark edge — but only its feet, tail, forearms and hands are drawn well.
+outline = "sticker_all"
+
+[style.outlines]
+sticker_all = """The whole figure has a clean sticker-style outline: a thin, even, unbroken white \
+band hugging the black silhouette, with a fine dark line on its outside edge, exactly like the \
+outline around the feet and tail in image 2. Same width everywhere, no gaps, no breaks, no \
+scratchy marks. Where one black shape passes in front of another, the same thin white line \
+separates them. No other white lines inside the body."""
+sticker_extremities = """Only the paws, feet, forearms and tail have a clean sticker-style \
+outline: a thin, even, unbroken white band with a fine dark line on its outside edge, exactly like \
+the outline around the feet and tail in image 2. The head and torso have no outline: black meets \
+the white background directly. No other white lines inside the body."""
+overlap_only = """The outside edge of the figure has no outline: black meets the white background \
+directly. A thin white line appears only inside the silhouette, where one black shape passes in \
+front of another (a leg in front of the body, the tail across a leg)."""
+
+# ---- variants ----------------------------------------------------------------------------------
+# 3eye is the base design. 2eye views are never designed separately: each one is DERIVED from the
+# approved 3eye image of the same view, so the two variants can only differ by the third eye.
+
+[variants.3eye]
+eyes = 3            # checked automatically on every candidate (bin/sheet count_eyes)
+# Appended to every 3eye direction. Models "correct" to two eyes whenever a prompt touches the
+# eyes (first expression round: 12 of 12 happy/sad/angry came back two-eyed), so say it every time.
+describe = """The cat has exactly THREE eyes: two side by side, and a third centred on the \
+forehead directly above and between them, forming a triangle. All three eyes are the same size and \
+all three show the same expression. Keep the nose exactly as in image 1."""
+negative = "two eyes"
+
+[variants.2eye]
+eyes = 2
+derive_from = "3eye"
+prompt = """Remove the third eye in the middle of the forehead of the cat in image 1. Fill that \
+area with solid black so the forehead matches the rest of the head. Keep the two lower eyes, the \
+pose, the proportions and everything else exactly the same."""
+negative = "third eye, three eyes, eye on forehead"
+
+# ---- views -------------------------------------------------------------------------------------
+# refs: "source" = the original drawing; "@<view>" = the approved image of that view (same
+# variant). A view whose @refs aren't approved yet is blocked — that's the point: approvals chain.
+# size: output canvas, multiples of 16, about 1 megapixel.
+
+[[views]]
+id = "head_front"
+group = "head"
+# 3eye: the source itself. Only its 2eye derivative is generated.
+
+[[views]]
+id = "body_biped_front"
+group = "body"
+# image 2 = the outline reference Colby picked (its outline, not its proportions or its tail)
+refs = ["source", "ref/style_outline_1845029838.png"]
+size = [896, 1152]
+prompt = """Draw the full body of the cat from image 1, standing upright on its two hind legs \
+like a person, facing the viewer. Front legs relaxed at its sides like arms, simple rounded paws. \
+The head is exactly the head from image 1, at full size; the body is sturdy and long \
+enough to carry that big head comfortably. The whiskers are plain thin \
+black lines with no outline. The tail grows from the base of the spine at \
+the BACK of the body: it emerges from behind one hip and curves up beside the body. The tail never \
+appears between the legs or in front of the body."""
+
+[[views]]
+id = "body_quadruped_side"
+group = "body"
+refs = ["source"]
+size = [1216, 832]
+prompt = """Draw the full body of the cat from image 1 walking on all four legs, body seen from \
+the side and facing right, long thin tail raised in a gentle curve. The head is turned toward the \
+viewer so the face from image 1 is fully visible."""
+
+[[views]]
+id = "body_sit_front"
+group = "body"
+refs = ["source"]
+size = [1024, 1024]
+prompt = """Draw the full body of the cat from image 1 sitting on its haunches like a house cat, \
+seen from the front, front paws together, tail wrapped around its feet. The head is exactly the \
+head from image 1."""
+
+# Turnaround: descends from the approved standing pose, so it is blocked until that is chosen.
+[[views]]
+id = "biped_three_quarter"
+group = "turnaround"
+refs = ["@body_biped_front"]
+size = [896, 1152]
+prompt = """Show the same cat from image 1 in the same standing pose, turned 45 degrees to its \
+left, a three-quarter view. Same proportions, same design."""
+
+[[views]]
+id = "biped_side"
+group = "turnaround"
+refs = ["@body_biped_front"]
+size = [896, 1152]
+# Prompt-only rotation failed 12/12 (head stayed facing front). Trying the camera-angle LoRA,
+# whose trigger phrase is Chinese: "rotate the camera 90 degrees to the left".
+loras = [["Qwen-Edit-2509-Multiple-angles.safetensors", 1.0]]
+prompt = """将镜头向左旋转90度 Show the same cat from image 1 in the same standing pose, turned 90 degrees to its \
+left, a full side profile. Same proportions, same design."""
+
+[[views]]
+id = "biped_back"
+group = "turnaround"
+refs = ["@body_biped_front"]
+size = [896, 1152]
+prompt = """Show the same cat from image 1 in the same standing pose, seen from directly behind: \
+the back of the head and ears, the back of the body, the tail. No face visible."""
+
+# Expressions: the design has no drawn mouth, so emotion lives in the eyes and ears. These are
+# explorations — expect to direct them with --note.
+[[views]]
+id = "expr_happy"
+group = "expression"
+refs = ["source"]
+size = [1024, 1024]
+prompt = """Change only the expression of the cat in image 1: happy and content. The eyes curve \
+into upturned arcs, ears perked up. Same head, same framing."""
+
+[[views]]
+id = "expr_sad"
+group = "expression"
+refs = ["source"]
+size = [1024, 1024]
+prompt = """Change only the expression of the cat in image 1: sad. Eyes droop at the outer edges, \
+pupils look down, ears folded down and back. Same head, same framing."""
+
+[[views]]
+id = "expr_angry"
+group = "expression"
+refs = ["source"]
+size = [1024, 1024]
+prompt = """Change only the expression of the cat in image 1: angry. Eyes narrowed with a flat \
+top edge, pupils thin slits, ears pinned flat to the sides. Same head, same framing."""
+
+[[views]]
+id = "expr_surprised"
+group = "expression"
+refs = ["source"]
+size = [1024, 1024]
+prompt = """Change only the expression of the cat in image 1: surprised. Eyes wide and perfectly \
+round, pupils small round dots, ears straight up. Same head, same framing."""
+
+# Mouth: the design has none yet, but dialogue needs one. This view explores what it could be.
+[[views]]
+id = "mouth_talking"
+group = "mouth"
+refs = ["source"]
+size = [1024, 1024]
+prompt = """The cat in image 1 is talking: add a simple open mouth just below the nose, drawn as \
+a white shape inside the black head, in the same graphic style as the eyes. Same head, same \
+framing."""

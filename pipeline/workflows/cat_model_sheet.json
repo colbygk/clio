@@ -1,0 +1,931 @@
+{
+ "last_node_id": 18,
+ "last_link_id": 22,
+ "nodes": [
+  {
+   "id": 1,
+   "type": "UNETLoader",
+   "pos": [
+    60,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "title": "UNETLoader",
+   "inputs": [],
+   "properties": {
+    "Node name for S&R": "UNETLoader"
+   },
+   "widgets_values": [
+    "qwen_image_edit_2511_fp8mixed.safetensors",
+    "default"
+   ],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "slot_index": 0,
+     "links": [
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "LoraLoaderModelOnly",
+   "pos": [
+    440,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "title": "Lightning 4-step (draft only)",
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoraLoaderModelOnly"
+   },
+   "widgets_values": [
+    "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    1.0
+   ],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "slot_index": 0,
+     "links": [
+      2
+     ]
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "ModelSamplingAuraFlow",
+   "pos": [
+    820,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "title": "ModelSamplingAuraFlow",
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 2
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ModelSamplingAuraFlow"
+   },
+   "widgets_values": [
+    3.1
+   ],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "slot_index": 0,
+     "links": [
+      3
+     ]
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "CFGNorm",
+   "pos": [
+    1200,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 12,
+   "mode": 0,
+   "title": "CFGNorm",
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 3
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CFGNorm"
+   },
+   "widgets_values": [
+    1.0,
+    false
+   ],
+   "outputs": [
+    {
+     "name": "patched_model",
+     "type": "MODEL",
+     "slot_index": 0,
+     "links": [
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "CLIPLoader",
+   "pos": [
+    60,
+    320
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "title": "CLIPLoader",
+   "inputs": [],
+   "properties": {
+    "Node name for S&R": "CLIPLoader"
+   },
+   "widgets_values": [
+    "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "qwen_image",
+    "default"
+   ],
+   "outputs": [
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "slot_index": 0,
+     "links": [
+      6,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "VAELoader",
+   "pos": [
+    60,
+    580
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "title": "VAELoader",
+   "inputs": [],
+   "properties": {
+    "Node name for S&R": "VAELoader"
+   },
+   "widgets_values": [
+    "qwen_image_vae.safetensors"
+   ],
+   "outputs": [
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "slot_index": 0,
+     "links": [
+      7,
+      12,
+      21
+     ]
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "type": "LoadImage",
+   "pos": [
+    60,
+    840
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "title": "image 1",
+   "inputs": [],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "cat/refs/ref_head_front_3eye.png",
+    "image"
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "slot_index": 0,
+     "links": [
+      4
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "slot_index": 1,
+     "links": []
+    }
+   ]
+  },
+  {
+   "id": 8,
+   "type": "FluxKontextImageScale",
+   "pos": [
+    440,
+    320
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "title": "FluxKontextImageScale",
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 4
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "FluxKontextImageScale"
+   },
+   "widgets_values": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "slot_index": 0,
+     "links": [
+      8,
+      13
+     ]
+    }
+   ]
+  },
+  {
+   "id": 9,
+   "type": "LoadImage",
+   "pos": [
+    60,
+    1100
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "title": "image 2",
+   "inputs": [],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "cat/refs/ref_style_outline_1845029838.png",
+    "image"
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "slot_index": 0,
+     "links": [
+      5
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "slot_index": 1,
+     "links": []
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "type": "FluxKontextImageScale",
+   "pos": [
+    440,
+    580
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "title": "FluxKontextImageScale",
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 5
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "FluxKontextImageScale"
+   },
+   "widgets_values": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "slot_index": 0,
+     "links": [
+      9,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "id": 11,
+   "type": "TextEncodeQwenImageEditPlus",
+   "pos": [
+    820,
+    320
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 10,
+   "mode": 0,
+   "title": "Direction (positive)",
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 6
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 7
+    },
+    {
+     "name": "image1",
+     "type": "IMAGE",
+     "link": 8
+    },
+    {
+     "name": "image2",
+     "type": "IMAGE",
+     "link": 9
+    },
+    {
+     "name": "image3",
+     "type": "IMAGE",
+     "link": null
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "TextEncodeQwenImageEditPlus"
+   },
+   "widgets_values": [
+    "Draw the full body of the cat from image 1, standing upright on its two hind legs like a person, facing the viewer. Front legs relaxed at its sides like arms, simple rounded paws. The head is exactly the head from image 1, at full size; the body is sturdy and long enough to carry that big head comfortably. The whiskers are plain thin black lines with no outline. The tail grows from the base of the spine at the BACK of the body: it emerges from behind one hip and curves up beside the body. The tail never appears between the legs or in front of the body. The cat has exactly THREE eyes: two side by side, and a third centred on the forehead directly above and between them, forming a triangle. All three eyes are the same size and all three show the same expression. Keep the nose exactly as in image 1. Keep the exact drawing style of the reference: flat solid black ink shapes on a plain white background, hand-drawn slightly uneven outlines, like a brush-pen drawing. No fur texture, no shading, no gradients, no grey, no colour. Each eye is a white oval with one thin vertical black slit pupil. Small white triangular nose with a short line beneath it. Thin black whiskers that extend outside the head. Single character, centred, whole figure visible, nothing cropped. The whole figure has a clean sticker-style outline: a thin, even, unbroken white band hugging the black silhouette, with a fine dark line on its outside edge, exactly like the outline around the feet and tail in image 2. Same width everywhere, no gaps, no breaks, no scratchy marks. Where one black shape passes in front of another, the same thin white line separates them. No other white lines inside the body."
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "slot_index": 0,
+     "links": [
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "id": 12,
+   "type": "FluxKontextMultiReferenceLatentMethod",
+   "pos": [
+    1200,
+    320
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 13,
+   "mode": 0,
+   "title": "FluxKontextMultiReferenceLatentMethod",
+   "inputs": [
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 10
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+   },
+   "widgets_values": [
+    "index_timestep_zero"
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "slot_index": 0,
+     "links": [
+      17
+     ]
+    }
+   ]
+  },
+  {
+   "id": 13,
+   "type": "TextEncodeQwenImageEditPlus",
+   "pos": [
+    820,
+    580
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 11,
+   "mode": 0,
+   "title": "Negative",
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 11
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 12
+    },
+    {
+     "name": "image1",
+     "type": "IMAGE",
+     "link": 13
+    },
+    {
+     "name": "image2",
+     "type": "IMAGE",
+     "link": 14
+    },
+    {
+     "name": "image3",
+     "type": "IMAGE",
+     "link": null
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "TextEncodeQwenImageEditPlus"
+   },
+   "widgets_values": [
+    "fur, hair texture, shading, gradient, grey, colour, realistic, 3d render, photo, text, watermark, multiple cats, cropped, two eyes"
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "slot_index": 0,
+     "links": [
+      15
+     ]
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "type": "FluxKontextMultiReferenceLatentMethod",
+   "pos": [
+    1200,
+    580
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 14,
+   "mode": 0,
+   "title": "FluxKontextMultiReferenceLatentMethod",
+   "inputs": [
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 15
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+   },
+   "widgets_values": [
+    "index_timestep_zero"
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "slot_index": 0,
+     "links": [
+      18
+     ]
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "type": "EmptySD3LatentImage",
+   "pos": [
+    60,
+    1360
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "title": "EmptySD3LatentImage",
+   "inputs": [],
+   "properties": {
+    "Node name for S&R": "EmptySD3LatentImage"
+   },
+   "widgets_values": [
+    896,
+    1152,
+    1
+   ],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "slot_index": 0,
+     "links": [
+      19
+     ]
+    }
+   ]
+  },
+  {
+   "id": 16,
+   "type": "KSampler",
+   "pos": [
+    1580,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 15,
+   "mode": 0,
+   "title": "KSampler",
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 16
+    },
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "link": 17
+    },
+    {
+     "name": "negative",
+     "type": "CONDITIONING",
+     "link": 18
+    },
+    {
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 19
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "KSampler"
+   },
+   "widgets_values": [
+    1,
+    "fixed",
+    4,
+    1.0,
+    "euler",
+    "simple",
+    1.0
+   ],
+   "outputs": [
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "slot_index": 0,
+     "links": [
+      20
+     ]
+    }
+   ]
+  },
+  {
+   "id": 17,
+   "type": "VAEDecode",
+   "pos": [
+    1960,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 16,
+   "mode": 0,
+   "title": "VAEDecode",
+   "inputs": [
+    {
+     "name": "samples",
+     "type": "LATENT",
+     "link": 20
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 21
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAEDecode"
+   },
+   "widgets_values": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "slot_index": 0,
+     "links": [
+      22
+     ]
+    }
+   ]
+  },
+  {
+   "id": 18,
+   "type": "SaveImage",
+   "pos": [
+    2340,
+    60
+   ],
+   "size": [
+    340,
+    200
+   ],
+   "flags": {},
+   "order": 17,
+   "mode": 0,
+   "title": "SaveImage",
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 22
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SaveImage"
+   },
+   "widgets_values": [
+    "cat/manual/sheet"
+   ],
+   "outputs": []
+  }
+ ],
+ "links": [
+  [
+   1,
+   1,
+   0,
+   2,
+   0,
+   "MODEL"
+  ],
+  [
+   2,
+   2,
+   0,
+   3,
+   0,
+   "MODEL"
+  ],
+  [
+   3,
+   3,
+   0,
+   4,
+   0,
+   "MODEL"
+  ],
+  [
+   4,
+   7,
+   0,
+   8,
+   0,
+   "IMAGE"
+  ],
+  [
+   5,
+   9,
+   0,
+   10,
+   0,
+   "IMAGE"
+  ],
+  [
+   6,
+   5,
+   0,
+   11,
+   0,
+   "CLIP"
+  ],
+  [
+   7,
+   6,
+   0,
+   11,
+   1,
+   "VAE"
+  ],
+  [
+   8,
+   8,
+   0,
+   11,
+   2,
+   "IMAGE"
+  ],
+  [
+   9,
+   10,
+   0,
+   11,
+   3,
+   "IMAGE"
+  ],
+  [
+   10,
+   11,
+   0,
+   12,
+   0,
+   "CONDITIONING"
+  ],
+  [
+   11,
+   5,
+   0,
+   13,
+   0,
+   "CLIP"
+  ],
+  [
+   12,
+   6,
+   0,
+   13,
+   1,
+   "VAE"
+  ],
+  [
+   13,
+   8,
+   0,
+   13,
+   2,
+   "IMAGE"
+  ],
+  [
+   14,
+   10,
+   0,
+   13,
+   3,
+   "IMAGE"
+  ],
+  [
+   15,
+   13,
+   0,
+   14,
+   0,
+   "CONDITIONING"
+  ],
+  [
+   16,
+   4,
+   0,
+   16,
+   0,
+   "MODEL"
+  ],
+  [
+   17,
+   12,
+   0,
+   16,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   18,
+   14,
+   0,
+   16,
+   2,
+   "CONDITIONING"
+  ],
+  [
+   19,
+   15,
+   0,
+   16,
+   3,
+   "LATENT"
+  ],
+  [
+   20,
+   16,
+   0,
+   17,
+   0,
+   "LATENT"
+  ],
+  [
+   21,
+   6,
+   0,
+   17,
+   1,
+   "VAE"
+  ],
+  [
+   22,
+   17,
+   0,
+   18,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {},
+ "version": 0.4
+}
