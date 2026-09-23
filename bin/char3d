@@ -1,0 +1,98 @@
+#!/usr/bin/env python3.11
+"""char3d — build a character in 3D from its approved sheet views, and render the ink look test.
+
+    char3d build cat                         mesh from approved front + side (biped)
+    char3d build cat --side-candidate 2088975501   try an unapproved side candidate
+    char3d turnaround cat [--angles 0,45,90]  ink-shader renders -> 3d/turnaround_*.png
+
+build: the edit model removes tail + whiskers from each view (to separate the parts), then Blender
+(on ceres) builds a visual hull body + a curve tail from the silhouettes — see
+pipeline/blender/visual_hull.py for why this isn't image-to-3D. Generated files live in the
+package's 3d/ (gitignored except the contact sheet); the inputs are recorded in 3d/build.json.
+"""
+import argparse
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline import graphs  # noqa: E402
+from pipeline.comfy import Comfy  # noqa: E402
+
+BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
+NOTAIL = ("Remove the tail and the whiskers from the cat in image 1. Where the tail overlapped the "
+          "body or a leg, continue the body or leg in solid black. Keep everything else exactly the "
+          "same: same pose, same position in the frame, same size, same outline.")
+
+
+def blender(script, *args):
+    r = subprocess.run([BLENDER, "-b", "-P", str(REPO / "pipeline/blender" / script), "--", *map(str, args)],
+                       capture_output=True, text=True)
+    if r.returncode or "Traceback" in r.stdout + r.stderr:
+        sys.exit(f"blender {script} failed:\n{(r.stdout + r.stderr)[-3000:]}")
+    return r.stdout
+
+
+def cmd_build(a):
+    pkg = REPO / "projects/cat/characters" / a.character
+    out = pkg / "3d"
+    out.mkdir(exist_ok=True)
+    approved = json.loads((pkg / "approved.json").read_text()).get("3eye", {})
+    front = pkg / approved["body_biped_front"]
+    if a.side_candidate:
+        side = pkg / "candidates/3eye/biped_side" / f"{a.side_candidate}.png"
+    elif "biped_side" in approved:
+        side = pkg / approved["biped_side"]
+    else:
+        sys.exit("no approved biped_side yet: approve one, or pass --side-candidate <seed>")
+    with Comfy(a.node) as c:
+        notail = {}
+        for tag, src in (("front", front), ("side", side)):
+            name = c.upload(src, subfolder=f"{a.character}/3d", name=f"src_{tag}.png")
+            w, h = struct_size(src)
+            g, _ = graphs.qwen_edit(NOTAIL, [name], a.seed, w, h, f"{a.character}/3d/notail_{tag}")
+            img = c.wait(c.submit(g))[0]
+            notail[tag] = c.fetch(img, out / f"notail_{tag}.png")
+            print(f"  tail-less {tag}: {notail[tag].relative_to(REPO)}")
+    blender("visual_hull.py", front, notail["front"], side, notail["side"], out / "hull.blend")
+    (out / "build.json").write_text(json.dumps({
+        "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "front": str(front.relative_to(pkg)),
+        "side": str(side.relative_to(pkg)), "side_approved": not a.side_candidate,
+        "notail_seed": a.seed, "notail_prompt": NOTAIL}, indent=2) + "\n")
+    print(f"  mesh: {(out / 'hull.blend').relative_to(REPO)} (+ .glb)")
+
+
+def cmd_turnaround(a):
+    out = REPO / "projects/cat/characters" / a.character / "3d"
+    if not (out / "hull.blend").exists():
+        sys.exit("no mesh yet: char3d build first")
+    blender("ink_turnaround.py", out / "hull.blend", out / "turnaround", a.angles)
+    shots = sorted(out.glob("turnaround_[0-9]*.png"))
+    sheet = out / "turnaround_sheet.png"
+    subprocess.run(["magick", *map(str, shots), "-resize", "x400", "-bordercolor", "#bbb", "-border", "2",
+                    "+append", str(sheet)], check=True)
+    print(f"  {len(shots)} angles -> {sheet.relative_to(REPO)}   (scene: 3d/turnaround_scene.blend)")
+
+
+def struct_size(p):
+    import struct
+    return struct.unpack(">II", p.read_bytes()[16:24])
+
+
+def main():
+    p = argparse.ArgumentParser(prog="char3d", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("build"); b.add_argument("character"); b.add_argument("--side-candidate", type=int)
+    b.add_argument("--seed", type=int, default=1); b.add_argument("--node", default="urania", choices=["urania", "clio"])
+    b.set_defaults(f=cmd_build)
+    t = sub.add_parser("turnaround"); t.add_argument("character")
+    t.add_argument("--angles", default="0,45,90,135,180,225,270,315"); t.set_defaults(f=cmd_turnaround)
+    a = p.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

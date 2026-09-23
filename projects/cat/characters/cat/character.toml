@@ -49,11 +49,18 @@ describe = """The cat has exactly THREE eyes: two side by side, and a third cent
 forehead directly above and between them, forming a triangle. All three eyes are the same size and \
 all three show the same expression. Keep the nose exactly as in image 1."""
 negative = "two eyes"
+# Views with angle = "profile" get this instead of the eye count above (Colby, 2026-09-23).
+profile = """Design rule for the side view: only the near eye is fully visible, and the third eye \
+shows as an artistic sliver: a thin white crescent of it peeking over the front curve of the \
+forehead, above and slightly ahead of the visible eye, as if glimpsed around the head."""
+profile_eyes = 1    # the sliver is too thin to count, by design
 
 [variants.2eye]
 eyes = 2
 derive_from = "3eye"
-prompt = """Remove the third eye in the middle of the forehead of the cat in image 1. Fill that \
+profile_eyes = 1
+prompt = """Remove the third eye in the middle of the forehead of the cat in image 1 (in a side \
+view, the thin sliver of it at the front edge of the forehead). Fill that \
 area with solid black so the forehead matches the rest of the head. Keep the two lower eyes, the \
 pose, the proportions and everything else exactly the same."""
 negative = "third eye, three eyes, eye on forehead"
@@ -117,6 +124,7 @@ size = [896, 1152]
 # Prompt-only rotation failed 12/12 (head stayed facing front). Trying the camera-angle LoRA,
 # whose trigger phrase is Chinese: "rotate the camera 90 degrees to the left".
 loras = [["Qwen-Edit-2509-Multiple-angles.safetensors", 1.0]]
+angle = "profile"
 prompt = """将镜头向左旋转90度 Show the same cat from image 1 in the same standing pose, turned 90 degrees to its \
 left, a full side profile. Same proportions, same design."""
 

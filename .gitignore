@@ -16,3 +16,6 @@ comfyui-docker/
 # Animation pipeline: generated candidates are regenerable (runs.jsonl + PNG metadata); only approved sheet/ images are canon
 projects/*/characters/*/candidates/
 __pycache__/
+projects/*/characters/*/3d/*
+!projects/*/characters/*/3d/turnaround_sheet.png
+!projects/*/characters/*/3d/build.json

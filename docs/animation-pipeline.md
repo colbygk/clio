@@ -14,6 +14,7 @@
 | Variants | Intro story starts with a **two-eyed** version of the same cat → the 2-eye / 3-eye split is a *variant* of one character, not two characters |
 | Cast | **More characters** will be introduced → every stage must be multi-character from the start |
 | Eye change | The 2→3-eye change **happens on screen, likely once**: the story opening is a coming-of-age arc (seeing the world as it is vs. as we want it to be). A hero moment — directed as its own shot, rig control `third_eye_open` 0→1 |
+| Profile | In side views the third eye shows as an **artistic sliver** peeking over the forehead curve |
 | Overlaps | **Thin white outline** separates black-on-black overlaps (limb over body, tail over leg). Line weight is part of the model sheet and fixed by the rig/shader, not left to AI |
 | Control | Colby must be able to **direct**, not pick from AI outputs. AI never free-runs from text alone; every generation is conditioned on something Colby authored |
 
@@ -89,6 +90,19 @@ auto-checked) → `sheet approve` → approved images unblock the views that ref
 Models (shared store on urania, visible on clio over NFS): qwen_image_edit_2511_fp8mixed,
 qwen_2.5_vl_7b_fp8_scaled, qwen_image_vae, Lightning 4/8-step LoRAs, 2509 Multiple-angles LoRA.
 Draft ≈ 14 s/image on urania; `--final` = 40 steps, cfg 4 (not yet timed).
+
+## 3D build + ink look test (built, first pass)
+
+`bin/char3d build cat` → `bin/char3d turnaround cat`. The edit model strips tail + whiskers from
+the approved front and side views; Blender (5.2 on ceres, no Linux-ARM build exists) builds a
+**visual hull** body with elliptical cross-sections plus a NURBS-curve tail from the silhouettes,
+then renders flat-black + sticker-outline (inverted hulls) with the eyes/nose projected from the
+sheet. Deterministic: the approved views define the shape.
+- **Hunyuan3D-2mv doesn't work for this design** (2026-09-23): 7 runs, every one a card, plaque or
+  box — a flat unshaded silhouette gives image-to-3D models no depth cues. Model left on the store.
+- Known gaps in pass 1: planar projection smears eyes at 45°; arms merge into the torso; tail is
+  lumpier than the drawing; whiskers not built. Next: modelled eye objects (rig controls, incl.
+  `third_eye_open`), separate arm parts, whisker curves, then a rig.
 
 ## Storage layout (proposed)
 

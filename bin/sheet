@@ -114,7 +114,8 @@ class Package:
             raise Blocked(f"needs {', '.join(m[1:] for m in missing)}@{variant} approved first")
         neg = ", ".join(x for x in (style.get("negative"), var.get("negative")) if x)
         outline = style.get("outlines", {}).get(outline or style.get("outline"), "")
-        text = " ".join(x for x in (v["prompt"], var.get("describe"), style["prompt"], outline) if x)
+        eyes = var.get("profile") if v.get("angle") == "profile" else var.get("describe")
+        text = " ".join(x for x in (v["prompt"], eyes, style["prompt"], outline) if x)
         return text, neg, refs, tuple(v["size"])
 
     def targets(self):
@@ -206,7 +207,9 @@ def cmd_run(a):
                 imgs = c.wait(c.submit(g))
                 local = c.fetch(imgs[0], pkg.dir / "candidates" / variant / view / f"{seed}.png")
                 dt = time.time() - t0
-                eyes, want = count_eyes(local), pkg.variants[variant].get("eyes")
+                var = pkg.variants[variant]
+                want = var.get("profile_eyes") if pkg.views[view].get("angle") == "profile" else var.get("eyes")
+                eyes = count_eyes(local)
                 flag = "" if eyes is None or want is None else (f"  eyes={eyes}" + ("" if eyes == want else "  <-- WRONG EYE COUNT"))
                 print(f" {dt:.0f}s  {local.relative_to(REPO)}{flag}")
                 with runs.open("a") as f:

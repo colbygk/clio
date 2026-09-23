@@ -64,3 +64,36 @@ def qwen_edit(prompt, refs, seed, width, height, prefix, quality="draft", loras=
     image = add("decode", "VAEDecode", samples=samples, vae=vae)
     add("save", "SaveImage", filename_prefix=prefix, images=image)
     return g, t
+
+
+HUNYUAN3D_MV = "hunyuan3d-dit-v2-mv_fp16.safetensors"
+
+
+def hunyuan3d_mv(views, seed, prefix, steps=30, cfg=7.5, octree=384):
+    """Mesh from up to four views, e.g. {"front": name, "left": name}. Shape only, no texture:
+    the look is added downstream (Blender), where the eyes also become rig-able objects."""
+    g, t = {}, {}
+
+    def add(nid, cls, title=None, **inputs):
+        g[nid] = {"class_type": cls, "inputs": inputs}
+        if title:
+            t[nid] = title
+        return [nid, 0]
+
+    add("ckpt", "ImageOnlyCheckpointLoader", ckpt_name=HUNYUAN3D_MV)
+    model, clipv, vae = ["ckpt", 0], ["ckpt", 1], ["ckpt", 2]
+    cond = {}
+    for side, name in views.items():
+        img = add(f"img_{side}", "LoadImage", f"{side} view", image=name)
+        cond[side] = add(f"enc_{side}", "CLIPVisionEncode", clip_vision=clipv, image=img, crop="none")
+    add("cond", "Hunyuan3Dv2ConditioningMultiView", **cond)
+    model = add("shift", "ModelSamplingAuraFlow", model=model, shift=1.0)
+    latent = add("latent", "EmptyLatentHunyuan3Dv2", resolution=3072, batch_size=1)
+    samples = add("sampler", "KSampler", model=model, positive=["cond", 0], negative=["cond", 1],
+                  latent_image=latent, seed=seed, steps=steps, cfg=cfg, sampler_name="euler",
+                  scheduler="normal", denoise=1.0)
+    voxel = add("decode", "VAEDecodeHunyuan3D", samples=samples, vae=vae, num_chunks=8000,
+                octree_resolution=octree)
+    mesh = add("mesh", "VoxelToMesh", voxel=voxel, algorithm="surface net", threshold=0.6)
+    add("save", "SaveGLB", mesh=mesh, filename_prefix=prefix)
+    return g, t

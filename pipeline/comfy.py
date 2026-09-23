@@ -46,6 +46,16 @@ class Comfy:
 
     # ---- tunnel ----
     def __enter__(self):
+        # the free-port probe can race another process for the port; a fresh port fixes it
+        for attempt in range(3):
+            try:
+                return self._open()
+            except RuntimeError:
+                if attempt == 2:
+                    raise
+                time.sleep(1)
+
+    def _open(self):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
         self.port = s.getsockname()[1]
@@ -117,7 +127,7 @@ class Comfy:
         return self.post("/prompt", {"prompt": graph, "client_id": "clio-pipeline"})["prompt_id"]
 
     def wait(self, prompt_id, poll=2.0, timeout=3600):
-        """Block until the job finishes; return its output images [{filename, subfolder, type}]."""
+        """Block until the job finishes; return its output files [{filename, subfolder, type}]."""
         t0 = time.time()
         while time.time() - t0 < timeout:
             h = self.get(f"/history/{prompt_id}")
@@ -127,7 +137,9 @@ class Comfy:
                 if status.get("status_str") == "error":
                     msgs = [m for m in status.get("messages", []) if m[0] == "execution_error"]
                     raise RuntimeError(f"job {prompt_id} failed: {json.dumps(msgs)[:2000]}")
-                return [img for out in entry.get("outputs", {}).values() for img in out.get("images", [])]
+                # images, and any other saved file (SaveGLB reports under "3d")
+                return [f for out in entry.get("outputs", {}).values() for files in out.values()
+                        if isinstance(files, list) for f in files if isinstance(f, dict) and "filename" in f]
             time.sleep(poll)
         raise TimeoutError(prompt_id)
 
