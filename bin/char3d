@@ -3,7 +3,8 @@
 
     char3d build cat                         mesh from approved front + side (biped)
     char3d build cat --side-candidate 2088975501   try an unapproved side candidate
-    char3d turnaround cat [--angles 0,45,90]  ink-shader renders -> 3d/turnaround_*.png
+    char3d turnaround cat [--angles 0,45,90]  ink-shader renders -> 3d/turnaround_*.png, and
+                                              published to https://urania.cgk.sh/outputs/cat/3d/
 
 build: the edit model removes tail + whiskers from each view (to separate the parts), then Blender
 (on ceres) builds a visual hull body + a curve tail from the silhouettes — see
@@ -20,7 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from pipeline import graphs  # noqa: E402
-from pipeline.comfy import Comfy  # noqa: E402
+from pipeline.comfy import Comfy, inventory  # noqa: E402
 
 BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
 NOTAIL = ("Remove the tail and the whiskers from the cat in image 1. Where the tail overlapped the "
@@ -75,6 +76,18 @@ def cmd_turnaround(a):
     subprocess.run(["magick", *map(str, shots), "-resize", "x400", "-bordercolor", "#bbb", "-border", "2",
                     "+append", str(sheet)], check=True)
     print(f"  {len(shots)} angles -> {sheet.relative_to(REPO)}   (scene: 3d/turnaround_scene.blend)")
+    publish(a.character, [sheet, *shots])
+
+
+def publish(character, files):
+    """Blender renders on ceres; copy them into urania's ComfyUI output/ so the /outputs/ gallery
+    (same client cert as ComfyUI) shows them next to the sheet candidates."""
+    inv = inventory()
+    host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/basedir/output/{character}/3d"
+    ssh = ["-o", "BatchMode=yes", "-i", inv["SSH_KEY"]]
+    subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {dest}"], check=True)
+    subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{dest}/"], check=True)
+    print(f"  view: https://{host}/outputs/{character}/3d/")
 
 
 def struct_size(p):
