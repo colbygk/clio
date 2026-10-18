@@ -104,6 +104,76 @@ sheet. Deterministic: the approved views define the shape.
   lumpier than the drawing; whiskers not built. Next: modelled eye objects (rig controls, incl.
   `third_eye_open`), separate arm parts, whisker curves, then a rig.
 
+## Production workflows (decided 2026-10-18)
+
+Four workflows, built by driving a first real 20–60 s scene through them rather than building
+generically. Each is a `bin/` command Claude drives with Colby in conversation, plus an exported
+`cat_*` graph in the studio Workflows menu for hands-on use. All of them read one **episode**.
+
+### The episode: one spine, two renderers
+
+```
+projects/cat/episodes/ep01/
+  script.fountain     the screenplay — Colby writes it, or it is drafted together and edited by him
+  shots.toml          derived shot list: per shot, characters+variant, pose/expression, set, camera,
+                      duration, dialogue lines, sound cues. Edited by hand; the source of truth
+  audio/              voice takes (recorded or cloned), foley, music, each with its cue time
+  keys/ tweens/       approved key frames and in-between clips (recipes in runs.jsonl)
+  out/                animation.mp4 and ep01.sb3
+```
+
+The **full animation** and the **Scratch project** are two renderers of the same episode, so a
+change to the script or a cue time flows to both.
+
+### 1. Character creation: `bin/sheet` (built; extend)
+Exists: directed views from `character.toml`, eye-count check, approve loop. Add: a **pose library**
+(named poses/expressions reused by key frames), more characters, and a **vector export** (trace the
+approved flat-black views to SVG parts), which is what the Scratch costumes and the later 2D cut-out
+rig are made from.
+
+### 2. Key frames: `bin/keys`
+Per shot, the image-edit model (same as the sheet) is conditioned on the approved sheet views of
+each character + a pose from the library, a `--note`, and optionally Colby's sketch or blocking
+image. Candidates → approve, like the sheet. One character per AI pass, composited over the set
+(the multi-character rule above).
+
+### 3. Animation between key frames: `bin/tween`
+**AI first, cut-out later.** Wan 2.2 `WanFirstLastFrameToVideo` (native in ComfyUI) between two
+approved keys, so both ends of every motion are pinned to frames Colby chose; motion is directed by
+the shot's action text and `--note`. Drift (lost third eye, silhouette changes) is checked
+automatically like the sheet's eye count. Shots where it drifts fall back to the **2D cut-out rig**
+built from the vector parts (the same parts Scratch uses). Dialogue shots can try audio-driven
+talking (`WanSoundImageToVideo` / InfiniteTalk / HuMo, all native) against the voice track.
+Assembly: ffmpeg, with the audio timeline mixed in.
+
+### Sound: `bin/sound` (serves both renderers)
+- **Colby's voice:** recorded takes, and a **local clone** of his voice for scratch/temp dialogue
+  and pickups (final lines can still be recorded).
+- **Other characters:** local TTS with designed voices.
+- **Music:** ACE-Step 1.5 (native in ComfyUI). Melodies meant for Scratch are written as notes.
+- **Foley/SFX:** a local video-to-audio model (MMAudio / HunyuanVideo-Foley class) synced to the
+  rendered shots.
+All local on the Sparks, studio profile. Voice cloning/TTS and foley need custom nodes + models
+installed (none present yet); ARM (aarch64) support is the risk to check per model.
+
+### 4. Scratch: `bin/scratch`
+Writes a `.sb3` (zip of `project.json` + assets) directly, importable at scratch.mit.edu:
+- **Sprites/costumes** from the vector parts and approved key poses; **backdrops** from the sets.
+- **Motion** from the shot list as blocks: `glide`, `go to`, `change size` (zoom), shake loops,
+  `switch costume`, `say`/`think` for captions.
+- **Timing** by broadcasts per shot/cue on one timeline, so sounds and motion stay in sync.
+- **Sound:** whole files (`play sound until done` / `start sound`) at their cues, plus music written
+  as notes → Music-extension `set instrument` / `play note for beats` blocks.
+- Respects Scratch's limits (per-asset size, project.json size) so it uploads cleanly.
+
+### Build order
+1. Script for the first scene (write/draft together) → `shots.toml` format.
+2. `bin/keys` for that scene's key frames.
+3. `bin/sound`: Colby's recorded voice + one TTS voice + music; then the clone; then foley.
+4. `bin/scratch` from keys + sound (first finished video).
+5. `bin/tween` + assembly (the full animation of the same scene).
+6. Vector parts → 2D cut-out fallback, as drift demands.
+
 ## Storage layout (proposed)
 
 In the **studio** ComfyUI profile ([comfyui-profiles.md](comfyui-profiles.md)), never `basedir/`.
