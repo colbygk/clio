@@ -261,7 +261,7 @@ def cmd_export_ui(a):
     out = REPO / "pipeline/workflows/cat_model_sheet.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(wf, indent=1))
-    dest = "/opt/clio/comfyui-docker/basedir/user/default/workflows/cat_model_sheet.json"
+    dest = "/opt/clio/comfyui-docker/studio/user/default/workflows/cat_model_sheet.json"
     for node in ("urania", "clio"):
         host = inv[f"{node.upper()}_MGMT"]
         r = subprocess.run(["scp", "-q", "-o", "BatchMode=yes", "-i", inv["SSH_KEY"], str(out),

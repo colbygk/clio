@@ -101,8 +101,10 @@ curl --cacert ~/.clio/ca/ca.crt \
 
 ## Browsing generated output
 
-`https://<node>.cgk.sh/outputs/` is a plain nginx `autoindex` of `basedir/output/`, behind the same
-client-certificate gate. It exists because **ComfyUI's Assets sidebar is a model browser** — the
+`https://<node>.cgk.sh/outputs/` is a plain nginx `autoindex` of the **studio** profile's
+`studio/output/`, behind the same client-certificate gate. The private profile's gallery is
+`https://<node>.cgk.sh:8443/outputs/` (`basedir/output/`), which admits only `private-*`
+certificates. See [comfyui-profiles.md](comfyui-profiles.md). It exists because **ComfyUI's Assets sidebar is a model browser** — the
 frontend only ever requests `/api/assets?include_tags=models`, so past generations never appear
 there even though the backend indexes them (173 tagged `output` on urania). The queue/history panel
 does show generations, but it is per-session and does not survive a container restart.

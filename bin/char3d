@@ -4,7 +4,7 @@
     char3d build cat                         mesh from approved front + side (biped)
     char3d build cat --side-candidate 2088975501   try an unapproved side candidate
     char3d turnaround cat [--angles 0,45,90]  ink-shader renders -> 3d/turnaround_*.png, and
-                                              published to https://urania.cgk.sh/outputs/cat/3d/
+                                              published to https://urania.cgk.sh/outputs/cat/3d/ (studio)
 
 build: the edit model removes tail + whiskers from each view (to separate the parts), then Blender
 (on ceres) builds a visual hull body + a curve tail from the silhouettes — see
@@ -80,10 +80,10 @@ def cmd_turnaround(a):
 
 
 def publish(character, files):
-    """Blender renders on ceres; copy them into urania's ComfyUI output/ so the /outputs/ gallery
+    """Blender renders on ceres; copy them into urania's studio output/ so the /outputs/ gallery
     (same client cert as ComfyUI) shows them next to the sheet candidates."""
     inv = inventory()
-    host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/basedir/output/{character}/3d"
+    host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/studio/output/{character}/3d"
     ssh = ["-o", "BatchMode=yes", "-i", inv["SSH_KEY"]]
     subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {dest}"], check=True)
     subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{dest}/"], check=True)

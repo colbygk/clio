@@ -106,7 +106,9 @@ sheet. Deterministic: the approved views define the shape.
 
 ## Storage layout (proposed)
 
-On urania's shared store so both nodes see it: `…/basedir/projects/cat/`
+In the **studio** ComfyUI profile ([comfyui-profiles.md](comfyui-profiles.md)), never `basedir/`.
+Shared inputs go in `studio/input/cat/` (NFS-shared, both nodes see it); renders land in each node's
+`studio/output/cat/`. Proposed tree under those:
 `bible/` (sheet, LoRA dataset) · `ep<NN>/sh<NNN>/{capture,anim,render,final}` · `audio/`.
 
 ## Phase 1 experiments (decide the look + path)

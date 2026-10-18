@@ -1,0 +1,25 @@
+# ComfyUI profile: studio — the animation work, and the default.
+#
+# Layered over the upstream compose-dgx_spark.yaml by clio-comfyui.service:
+#     docker compose -f compose-dgx_spark.yaml -f /opt/clio/comfyui/studio.yaml up
+# Relative paths resolve against the FIRST file's directory, i.e. /opt/clio/comfyui-docker.
+#
+# The point is that nothing from the private profile can surface here, by accident or otherwise:
+# every place ComfyUI lists files (gallery, Load Image dropdowns, Workflows menu, Assets index,
+# model pickers) reads one of the directories below instead of basedir/. Docker mounts parents
+# before children, so these land on top of the upstream ./basedir:/basedir mount.
+services:
+  comfyui-nvidia:
+    volumes:
+      - ./studio/input:/basedir/input       # NFS-shared from urania, like basedir/input
+      - ./studio/output:/basedir/output
+      - ./studio/user:/basedir/user         # workflows, settings, logs, assets DB
+      # A curated tree of symlinks into the full store (cluster/comfyui/studio-models.txt, built by
+      # 32-comfyui-profiles.sh). The links point at /store/models, which only exists in here.
+      - ./studio/models:/basedir/models
+      - ./basedir/models:/store/models:ro
+    environment:
+      # Replaces the upstream value outright (env keys override, they do not append), so it must
+      # carry every flag the base file sets. --database-url moves the assets index into this
+      # profile's user dir; its default is inside the shared ComfyUI checkout under run/.
+      COMFY_CMDLINE_EXTRA: --enable-assets --database-url sqlite:////basedir/user/comfyui.db --bf16-unet --bf16-vae --bf16-text-enc

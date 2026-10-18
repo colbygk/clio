@@ -19,6 +19,7 @@ need_root
 HOST=$(hostname -s)
 FQDN="$HOST.${CLUSTER_DOMAIN:-cgk.sh}"
 PORT=${COMFYUI_PORT:-8188}
+PRIVATE_PORT=${COMFYUI_PRIVATE_PORT:-8189}
 STAGE=/tmp/clio-pki
 PKI=/etc/clio-pki
 
@@ -69,6 +70,13 @@ map $http_upgrade $connection_upgrade {
 # NONE (none offered), SUCCESS, or FAILED:<reason>.
 log_format mtls '$remote_addr verify=$ssl_client_verify dn="$ssl_client_s_dn" '
                 '[$time_local] "$request" $status $body_bytes_sent "$http_user_agent"';
+
+# The private ComfyUI profile (:8443) admits only client certificates named private-*.
+# $ssl_client_s_dn is RFC 2253 order, e.g. "CN=private-ceres,OU=clio cluster,O=cgk.sh".
+map $ssl_client_s_dn $clio_private_client {
+    default                  0;
+    "~(^|,)CN=private-[^,]+" 1;
+}
 EOF
 
 # Error pages, styled to match https://cgk.sh. The shared CSS is injected into each page at the
@@ -91,9 +99,14 @@ for page in denied upstream error; do
   chmod 644 "/usr/share/nginx/clio-errors/_$page.html"
 done
 
-OUTPUT_DIR=$CLUSTER_DIR/comfyui-docker/basedir/output
-sed -e "s|__FQDN__|$FQDN|g" -e "s|__HOST__|$HOST|g" -e "s|__PORT__|$PORT|g" \
-    -e "s|__OUTPUT_DIR__|$OUTPUT_DIR|g" \
+install -d -m 755 /etc/nginx/snippets
+for f in common proxy; do
+  install -m 644 "$CLUSTER_DIR/nginx/comfyui-$f.conf" "/etc/nginx/snippets/clio-comfyui-$f.conf"
+done
+sed -e "s|__FQDN__|$FQDN|g" -e "s|__HOST__|$HOST|g" \
+    -e "s|__PRIVATE_PORT__|$PRIVATE_PORT|g" -e "s|__PORT__|$PORT|g" \
+    -e "s|__STUDIO_OUTPUT_DIR__|$CLUSTER_DIR/comfyui-docker/studio/output|g" \
+    -e "s|__PRIVATE_OUTPUT_DIR__|$CLUSTER_DIR/comfyui-docker/basedir/output|g" \
     "$CLUSTER_DIR/nginx/comfyui.conf.tmpl" > /etc/nginx/sites-available/clio-comfyui
 ln -sf /etc/nginx/sites-available/clio-comfyui /etc/nginx/sites-enabled/clio-comfyui
 # The stock default site also claims default_server on :80 and would collide.
@@ -129,4 +142,4 @@ if [ "$RESTART_NEEDED" = 1 ]; then
   fi
 fi
 
-log "45-nginx done. https://$FQDN/ (client certificate required)"
+log "45-nginx done. studio https://$FQDN/  private https://$FQDN:8443/ (client certificate required)"

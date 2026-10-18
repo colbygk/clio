@@ -53,14 +53,5 @@ chown "$REAL_USER":"$REAL_USER" "$REPO/.env"
 for d in basedir run userscripts_dir; do mkdir -p "$REPO/$d"; done
 chown -R 1000:1000 "$REPO/basedir" "$REPO/run" "$REPO/userscripts_dir"
 
-COMPOSE_FILE=$(ls "$REPO"/compose-dgx_spark.yaml "$REPO"/compose*spark*.yaml 2>/dev/null | head -1 || true)
-[ -n "$COMPOSE_FILE" ] || warn "compose-dgx_spark.yaml not found in repo — check $REPO and edit clio-comfyui.service"
-log "ComfyUI compose: ${COMPOSE_FILE:-<not found>}"
-
-log "Installing ComfyUI systemd unit (enabled but not started)"
-sed "s|__COMPOSE_FILE__|${COMPOSE_FILE:-$REPO/compose-dgx_spark.yaml}|; s|__REPO__|$REPO|" \
-  "$CLUSTER_DIR/systemd/clio-comfyui.service.tmpl" > /etc/systemd/system/clio-comfyui.service
-systemctl daemon-reload
-systemctl enable clio-comfyui.service   # starts on boot only after first manual `up`; safe to leave enabled
-systemctl disable clio-comfyui.service  # default OFF — start on demand via clusterctl
-log "30-comfyui done. Start on demand: clusterctl comfyui up"
+# The systemd unit is installed by 32-comfyui-profiles.sh, which owns the studio/private layout it runs.
+log "30-comfyui done. Next: 32-comfyui-profiles"

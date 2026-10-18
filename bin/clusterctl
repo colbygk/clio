@@ -9,8 +9,9 @@
 #   clusterctl shard <profile>      SCALE-UP: run one big model across both nodes (PP=2)
 #   clusterctl down                 stop all model serving
 #   clusterctl use <model>          point THIS machine's Claude Code at a gateway model
-#   clusterctl mode <node> [role]   show/set a node's role: llm | comfy | off (they are exclusive)
-#   clusterctl comfyui up|down      start/stop ComfyUI on both nodes
+#   clusterctl mode <node> [role]   show/set a node's role: llm | studio | private | off (exclusive)
+#   clusterctl comfyui up|down      start/stop ComfyUI on both nodes (in each node's current profile)
+#   clusterctl comfyui sync [node]  push the studio/private profiles + rebuild studio's model list
 #   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
 #   clusterctl lan-mtu <mtu> [node] change management-LAN MTU, verified before it is persisted
 #   clusterctl freemem [node]       drop page cache (diagnostic; rarely the fix — see docs)
@@ -105,6 +106,7 @@ rsync_repo() {
   # shellcheck disable=SC2046  # word-splitting of protect_args is intended
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
     --exclude 'gateway.env' --exclude 'active-profile.env' --exclude 'shard-profile.env' \
+    --exclude 'comfyui-profile.env' \
     $(protect_args) \
     "$REPO_ROOT/cluster/" "$SSH_USER@$h:/opt/clio/"
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
@@ -165,6 +167,7 @@ cmd_bootstrap() {
     say "[$h] 10-network"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/10-network.sh'
     say "[$h] 20-vllm (LONG build)"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/20-vllm.sh'
     say "[$h] 30-comfyui"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/30-comfyui.sh'
+    say "[$h] 32-comfyui-profiles"; on "$h" 'sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/32-comfyui-profiles.sh'
   done
   # 35 is ordered, not per-node: the store host must be exporting before the other node mounts it.
   local store other
@@ -253,27 +256,34 @@ resolve_node() {
 # ExecStop gives docker up to 60s to release the model) and only then start the incoming one.
 # Conflicts= stays as the safety net for anyone driving systemctl directly.
 cmd_mode() {
-  local name=${1:?"mode <clio|urania> [llm|comfy|off]"} role=${2:-} node
+  local name=${1:?"mode <clio|urania> [llm|studio|private|off]"} role=${2:-} node
   node=$(resolve_node "$name")
+  [ "$role" = comfy ] && role=studio   # the old name; studio is the default profile
   case "$role" in
     llm)
       say "$name -> llm (stopping ComfyUI first, then starting clio-vllm)"
       on "$node" 'sudo systemctl stop clio-comfyui; sudo systemctl reset-failed clio-comfyui 2>/dev/null; sudo systemctl start clio-vllm'
       say "Model comes from /opt/clio/active-profile.env. Cold start is slow — clusterctl logs vllm $name";;
-    comfy)
-      say "$name -> comfy (stopping vLLM first, then starting clio-comfyui)"
-      on "$node" 'sudo systemctl stop clio-vllm clio-vllm-shard; sudo systemctl reset-failed clio-vllm clio-vllm-shard 2>/dev/null; sudo systemctl start clio-comfyui'
-      say "ComfyUI at http://$node:${COMFYUI_PORT} (LAN only — never port-forward it)";;
+    studio|private)
+      # ComfyUI is stopped BEFORE the profile file changes: the unit's ExecStop reads the profile too.
+      say "$name -> $role (stopping vLLM and any running ComfyUI, then starting clio-comfyui as $role)"
+      on "$node" "sudo systemctl stop clio-vllm clio-vllm-shard clio-comfyui
+                  sudo systemctl reset-failed clio-vllm clio-vllm-shard clio-comfyui 2>/dev/null
+                  echo COMFY_PROFILE=$role | sudo tee /opt/clio/comfyui-profile.env >/dev/null
+                  sudo systemctl start clio-comfyui"
+      if [ "$role" = studio ]; then say "Studio at https://$node/  (gallery: /outputs/)"
+      else say "Private at https://$node:8443/  (needs a private-* client certificate)"; fi;;
     off)
       say "$name -> off (stopping both roles, freeing the memory pool)"
       on "$node" 'sudo systemctl stop clio-comfyui clio-vllm clio-vllm-shard 2>/dev/null || true';;
     "")
       ;;   # fall through to the status readout below
-    *) die "mode <clio|urania> [llm|comfy|off]";;
+    *) die "mode <clio|urania> [llm|studio|private|off]";;
   esac
   printf '\033[1;36m==>\033[0m %s: ' "$name"
   on "$node" 'v=$(systemctl is-active clio-vllm); s=$(systemctl is-active clio-vllm-shard); c=$(systemctl is-active clio-comfyui)
-              if [ "$c" = active ]; then echo "comfy"; elif [ "$v" = active ] || [ "$s" = active ]; then echo "llm"; else echo "off"; fi'
+              p=$(sed -n "s/^COMFY_PROFILE=//p" /opt/clio/comfyui-profile.env 2>/dev/null); p=${p:-studio}
+              if [ "$c" = active ]; then echo "$p"; elif [ "$v" = active ] || [ "$s" = active ]; then echo "llm"; else echo "off"; fi'
 }
 
 cmd_comfyui() {
@@ -282,7 +292,7 @@ cmd_comfyui() {
     clio)   hosts=("$CLIO_MGMT");;
     urania) hosts=("$URANIA_MGMT");;
     all)    ;;
-    *) die "comfyui up|down [clio|urania]";;
+    *) die "comfyui up|down|sync [clio|urania]";;
   esac
   case "$action" in
     up)   for h in "${hosts[@]}"; do on "$h" 'sudo systemctl stop clio-vllm clio-vllm-shard; sudo systemctl start clio-comfyui'; done
@@ -290,7 +300,22 @@ cmd_comfyui() {
           say "Any vLLM server on those nodes was stopped (Conflicts=) — 'clusterctl mode <node> llm' puts it back."
           say "Parallelism: add ComfyUI-Distributed via Manager (host on one, add the other as Remote worker — docs/comfyui.md)";;
     down) for h in "${hosts[@]}"; do on "$h" 'sudo systemctl stop clio-comfyui 2>/dev/null || true'; done; say "ComfyUI stopped on: ${hosts[*]}";;
-    *) die "comfyui up|down [clio|urania]";;
+    sync)
+      # Just the profile files and the step that applies them — not a full repo sync, so it is safe
+      # to run while a node is busy. The running container is not restarted.
+      for h in "${hosts[@]}"; do
+        say "[$h] comfyui profiles"
+        on "$h" 'rm -rf /tmp/clio-comfyui-src && mkdir -p /tmp/clio-comfyui-src'
+        scp -qr "${SSH_OPTS[@]}" "$REPO_ROOT/cluster/comfyui" "$REPO_ROOT/cluster/systemd/clio-comfyui.service.tmpl" \
+                "$REPO_ROOT/scripts/bootstrap/32-comfyui-profiles.sh" "$SSH_USER@$h:/tmp/clio-comfyui-src/"
+        on "$h" 'cd /tmp/clio-comfyui-src && sudo rm -rf /opt/clio/comfyui && sudo cp -r comfyui /opt/clio/
+                 sudo cp clio-comfyui.service.tmpl /opt/clio/systemd/
+                 sudo cp 32-comfyui-profiles.sh /opt/clio/scripts/bootstrap/ && sudo chmod +x /opt/clio/scripts/bootstrap/32-comfyui-profiles.sh
+                 cd / && rm -rf /tmp/clio-comfyui-src
+                 sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/32-comfyui-profiles.sh'
+      done
+      say "A running studio picks up model-list changes on a browser refresh; unit/profile changes on its next start.";;
+    *) die "comfyui up|down|sync [clio|urania]";;
   esac
 }
 
@@ -369,15 +394,16 @@ cmd_nginx() {
         scp -q "${SSH_OPTS[@]}" "$ca_dir/private/$fqdn.key"      "$SSH_USER@$h:/tmp/clio-pki/server.key"
         on "$h" 'rm -rf /tmp/nginx-src && mkdir -p /tmp/nginx-src'
         scp -qr "${SSH_OPTS[@]}" "$REPO_ROOT/cluster/nginx/comfyui.conf.tmpl" "$REPO_ROOT/cluster/nginx/errors" \
+                "$REPO_ROOT/cluster/nginx/comfyui-common.conf" "$REPO_ROOT/cluster/nginx/comfyui-proxy.conf" \
                 "$SSH_USER@$h:/tmp/nginx-src/"
         scp -q  "${SSH_OPTS[@]}" "$REPO_ROOT/scripts/bootstrap/45-nginx.sh"   "$SSH_USER@$h:/tmp/45-nginx.sh"
         on "$h" 'sudo mkdir -p /opt/clio/nginx && sudo rm -rf /opt/clio/nginx/errors
-                 sudo cp -r /tmp/nginx-src/comfyui.conf.tmpl /tmp/nginx-src/errors /opt/clio/nginx/
+                 sudo cp -r /tmp/nginx-src/comfyui.conf.tmpl /tmp/nginx-src/comfyui-common.conf /tmp/nginx-src/comfyui-proxy.conf /tmp/nginx-src/errors /opt/clio/nginx/
                  sudo cp /tmp/45-nginx.sh /opt/clio/scripts/bootstrap/ && sudo chmod +x /opt/clio/scripts/bootstrap/45-nginx.sh
                  rm -rf /tmp/nginx-src /tmp/45-nginx.sh
                  sudo CLUSTER_DIR=/opt/clio bash /opt/clio/scripts/bootstrap/45-nginx.sh'
       done
-      say "Done. Reach it at https://<node>.${CLUSTER_DOMAIN:-cgk.sh}/ with a client certificate."
+      say "Done. Studio at https://<node>.${CLUSTER_DOMAIN:-cgk.sh}/, private at :8443 (private-* certificate only)."
       say "No cert on this Mac yet?  clio-pki client <name>   then import the .p12 (docs/security.md)";;
     status)
       for h in "${hosts[@]}"; do

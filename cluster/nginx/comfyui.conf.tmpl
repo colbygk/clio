@@ -1,9 +1,16 @@
-# ComfyUI behind nginx with mutual TLS (template — 45-nginx.sh fills __FQDN__/__HOST__/__PORT__).
+# ComfyUI behind nginx with mutual TLS (template — 45-nginx.sh fills the __PLACEHOLDERS__).
 #
-# The only way in is 443 with a client certificate signed by the cluster CA. ComfyUI itself binds
+# The only way in is TLS with a client certificate signed by the cluster CA. ComfyUI itself binds
 # 127.0.0.1 only (see 30-comfyui.sh), so this proxy is not merely the front door — it is the ONLY
 # door. That matters: ComfyUI has no authentication of its own and custom nodes execute arbitrary
 # code, which is exactly what the Apr-2026 botnet swept the internet for.
+#
+# Two doors, one per ComfyUI profile (docs/comfyui-profiles.md). Only one profile runs at a time,
+# so the other door answers with the "not answering" page:
+#   :443   studio   -> 127.0.0.1:__PORT__          any cluster client certificate
+#   :8443  private  -> 127.0.0.1:__PRIVATE_PORT__  only certificates whose CN starts "private-"
+# The separate port is deliberate: it is a separate browser origin, so tabs, history and other
+# per-site state from the private UI never reappear in the studio one.
 
 server {
     listen 80 default_server;
@@ -13,58 +20,18 @@ server {
     return 301 https://__FQDN__$request_uri;
 }
 
+# ---------------------------------------------------------------- studio
 server {
     listen 443 ssl http2 default_server;
     listen [::]:443 ssl http2 default_server;
     server_name __FQDN__ __HOST__;
 
-    ssl_certificate     /etc/clio-pki/server.crt;
-    ssl_certificate_key /etc/clio-pki/server.key;
-
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
-    ssl_session_tickets off;
-
-    # ---- mutual TLS: the access-control barrier ----
-    # A client with no certificate, a self-signed one, or one from any other CA is rejected during
-    # the handshake — it never reaches ComfyUI. default_server above means this also applies when
-    # the box is addressed by bare IP, so there is no unauthenticated side entrance.
-    ssl_client_certificate /etc/clio-pki/ca.crt;
-    ssl_verify_client on;
-    ssl_verify_depth 1;
-
-    # ComfyUI moves big payloads: source stills in, rendered video out.
-    client_max_body_size 2048m;
-    # A single Wan render can run for many minutes with no bytes on the wire; the default 60s
-    # read timeout would tear the connection down mid-job.
-    proxy_read_timeout  3600s;
-    proxy_send_timeout  3600s;
-    send_timeout        3600s;
-
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header X-Content-Type-Options "nosniff" always;
+    include /etc/nginx/snippets/clio-comfyui-common.conf;
+    # 497 is plain HTTP spoken to the TLS port — send them to the real front door.
+    error_page 497 https://__FQDN__$request_uri;
 
     access_log /var/log/nginx/comfyui.access.log mtls;
     error_log  /var/log/nginx/comfyui.error.log;
-
-    # ---- styled error pages (see cluster/nginx/errors/) ----
-    # 495 = client sent a certificate that failed verification, 496 = it sent none. nginx surfaces
-    # both to the client as 400, so `=400` keeps the observable status exactly as it was while
-    # replacing the stock "No required SSL certificate was sent" body.
-    error_page 495 496 =400 /_denied.html;
-    # 497 is plain HTTP spoken to the TLS port — send them to the real front door.
-    error_page 497 https://__FQDN__$request_uri;
-    error_page 502 503 504 /_upstream.html;
-    error_page 400 403 404 405 408 413 500 /_error.html;
-
-    # `internal` means these can only be reached by nginx's own error redirect, never fetched
-    # directly. The CSS is inlined into each page: a second request for a stylesheet would itself
-    # need a client certificate, so the denied page would render unstyled — exactly when it matters.
-    location = /_denied.html   { internal; root /usr/share/nginx/clio-errors; }
-    location = /_upstream.html { internal; root /usr/share/nginx/clio-errors; }
-    location = /_error.html    { internal; root /usr/share/nginx/clio-errors; }
 
     # ---- browsable output gallery ----
     # ComfyUI's Assets sidebar only ever queries `include_tags=models`, so past generations are
@@ -75,7 +42,7 @@ server {
     # support for free, which is what lets the browser seek in an mp4 instead of downloading it
     # whole before playing.
     location /outputs/ {
-        alias __OUTPUT_DIR__/;
+        alias __STUDIO_OUTPUT_DIR__/;
         autoindex on;
         autoindex_exact_size off;
         autoindex_localtime on;
@@ -83,22 +50,37 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:__PORT__;
-        proxy_http_version 1.1;
+        include /etc/nginx/snippets/clio-comfyui-proxy.conf;
+    }
+}
 
-        # ComfyUI's progress/preview channel is a WebSocket; without these it silently degrades
-        # to a UI that never updates while a job runs.
-        proxy_set_header Upgrade    $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
+# ---------------------------------------------------------------- private
+server {
+    listen 8443 ssl http2 default_server;
+    listen [::]:8443 ssl http2 default_server;
+    server_name __FQDN__ __HOST__;
 
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        # Pass the verified client identity through, so ComfyUI logs show who did what.
-        proxy_set_header X-Client-DN       $ssl_client_s_dn;
+    include /etc/nginx/snippets/clio-comfyui-common.conf;
+    error_page 497 https://__FQDN__:8443$request_uri;
 
-        # Stream progress events straight through instead of buffering them into silence.
-        proxy_buffering off;
-        proxy_request_buffering off;
+    access_log /var/log/nginx/comfyui-private.access.log mtls;
+    error_log  /var/log/nginx/comfyui-private.error.log;
+
+    # The second gate. The handshake already proved the certificate is ours; this narrows it to the
+    # private-* ones ($clio_private_client is a map in conf.d/10-websocket-upgrade.conf). The check
+    # sits in each location rather than at server level: a server-level `return` would also catch
+    # the internal redirect to /_error.html and loop.
+    location /outputs/ {
+        if ($clio_private_client = 0) { return 403; }
+        alias __PRIVATE_OUTPUT_DIR__/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+    }
+
+    location / {
+        if ($clio_private_client = 0) { return 403; }
+        proxy_pass http://127.0.0.1:__PRIVATE_PORT__;
+        include /etc/nginx/snippets/clio-comfyui-proxy.conf;
     }
 }

@@ -1,11 +1,17 @@
-# ComfyUI on a node (template — 30-comfyui.sh fills __REPO__/__COMPOSE_FILE__). On demand only.
+# ComfyUI on a node (template — 32-comfyui-profiles.sh fills __REPO__/__COMPOSE_FILE__/__CLUSTER_DIR__).
+# On demand only.
 #
 # Mutually exclusive with the vLLM units: one 119 GiB unified-memory pool serves both the GPU and
 # the system, so a model server and ComfyUI cannot coexist (an OOM here freezes the whole box).
 # Conflicts= makes the swap atomic — `systemctl start clio-comfyui` stops vLLM first, and starting
-# vLLM again stops ComfyUI. Drive it with `clusterctl mode <node> llm|comfy|off`.
+# vLLM again stops ComfyUI. Drive it with `clusterctl mode <node> llm|studio|private|off`.
+#
+# PROFILES: the same container runs as either `studio` (the animation work, the default) or
+# `private` (personal work), chosen by __CLUSTER_DIR__/comfyui-profile.env and layered over the
+# upstream compose file from __CLUSTER_DIR__/comfyui/<profile>.yaml. Only one runs at a time, for
+# the same memory reason as above. See docs/comfyui-profiles.md.
 [Unit]
-Description=clio cluster - ComfyUI
+Description=clio cluster - ComfyUI (%N, profile from comfyui-profile.env)
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
@@ -14,18 +20,21 @@ Conflicts=clio-vllm.service clio-vllm-shard.service
 # basedir recursively at container start, so the NFS mounts must already be up or the container
 # sees empty dirs. On the node that OWNS the store these paths are plain directories on / and this
 # resolves to -.mount, which is always active — so the same unit works on both nodes.
-RequiresMountsFor=__REPO__/basedir/models __REPO__/basedir/input
+RequiresMountsFor=__REPO__/basedir/models __REPO__/basedir/input __REPO__/studio/input
 
 [Service]
 Type=simple
+# studio unless the profile file says otherwise; EnvironmentFile= wins over Environment=.
+Environment=COMFY_PROFILE=studio
+EnvironmentFile=-__CLUSTER_DIR__/comfyui-profile.env
 # NOTE: an ExecStartPre that dropped page cache was tried here and REMOVED. Page cache is
 # reclaimable — the kernel evicts it under pressure and counts it in MemAvailable — so dropping it
 # does not free anything the allocator could not already have taken, and it throws away the cached
 # model weights that make reusing a model fast. Reclaim on demand with `clusterctl freemem` if you
 # ever genuinely need to, but it is not a fix for allocation failures.
 WorkingDirectory=__REPO__
-ExecStart=/usr/bin/docker compose -f __COMPOSE_FILE__ up
-ExecStop=/usr/bin/docker compose -f __COMPOSE_FILE__ down
+ExecStart=/usr/bin/docker compose -f __COMPOSE_FILE__ -f __CLUSTER_DIR__/comfyui/${COMFY_PROFILE}.yaml up
+ExecStop=/usr/bin/docker compose -f __COMPOSE_FILE__ -f __CLUSTER_DIR__/comfyui/${COMFY_PROFILE}.yaml down
 Restart=on-failure
 RestartSec=10
 

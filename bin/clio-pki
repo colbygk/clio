@@ -4,6 +4,7 @@
 #   clio-pki init                 create the CA (once). Idempotent — refuses to clobber.
 #   clio-pki server <clio|urania> issue/renew that node's HTTPS server certificate
 #   clio-pki client <name>        issue a client certificate + .p12 bundle to install on a device
+#                                 (a name starting "private-" also opens the private ComfyUI on :8443)
 #   clio-pki revoke <name>        drop a client from the allow-list (see NOTE on revocation)
 #   clio-pki list                 what exists, and when it expires
 #   clio-pki ca-cert              print the CA certificate (this is what you trust on a device)
@@ -111,11 +112,14 @@ subjectAltName=email:$name@$DOMAIN"
   echo "   (also saved to $pwfile)"
   # The step everyone forgets. Without an identity preference macOS may never present the
   # certificate, and the browser shows the denied page exactly as if none were installed.
+  # A private-* cert is pinned to the :8443 door only, so the studio keeps using the everyday one.
+  local port=""
+  case "$name" in private-*) port=":8443";; esac
   cat <<EOF
 
    On macOS, after importing the .p12 and trusting the CA:
-     security set-identity-preference -s "https://clio.cgk.sh"   -c "$name"
-     security set-identity-preference -s "https://urania.cgk.sh" -c "$name"
+     security set-identity-preference -s "https://clio.cgk.sh$port/"   -c "$name"
+     security set-identity-preference -s "https://urania.cgk.sh$port/" -c "$name"
    then fully quit and reopen the browser (it caches the 'no certificate' result per site).
 EOF
 }

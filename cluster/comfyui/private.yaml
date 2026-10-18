@@ -1,0 +1,14 @@
+# ComfyUI profile: private — personal work, kept out of the studio entirely.
+#
+# This is the original basedir/ layout unchanged: the full model store, basedir/{input,output,user}.
+# What changes is how it is reached. It publishes on 127.0.0.1:8189 instead of 8188, and nginx
+# fronts that on :8443 with a second gate — only client certificates named private-* get in
+# (cluster/nginx/comfyui.conf.tmpl). A different port is a different browser origin, so open
+# workflow tabs and other per-site browser state never carry across into the studio.
+services:
+  comfyui-nvidia:
+    ports: !override
+      - 127.0.0.1:8189:8188
+    environment:
+      # See studio.yaml: this replaces the upstream value, so it carries every base flag.
+      COMFY_CMDLINE_EXTRA: --enable-assets --database-url sqlite:////basedir/user/comfyui.db --bf16-unet --bf16-vae --bf16-text-enc

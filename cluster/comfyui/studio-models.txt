@@ -1,0 +1,27 @@
+# Models the studio profile can see — paths under basedir/models/, shell globs allowed.
+# Everything else in the store stays invisible to the studio. After editing, apply with:
+#     clusterctl comfyui sync
+# (a running studio needs a browser refresh; new folders need a ComfyUI restart).
+
+# Qwen-Image-Edit 2511: the model-sheet tool (pipeline/graphs.py QWEN_EDIT)
+diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors
+text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+vae/qwen_image_vae.safetensors
+loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors
+loras/Qwen-Edit-2509-Multiple-angles.safetensors
+
+# Wan 2.2, base weights only: TI2V-5B and I2V-A14B (high/low experts)
+diffusion_models/wan2.2_ti2v_5B_fp16.safetensors
+diffusion_models/Wan2.2-I2V-A14B-*Noise-*.gguf
+text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+vae/wan2.2_vae.safetensors
+vae/wan_2.1_vae.safetensors
+
+# Hunyuan3D multiview (bin/char3d)
+checkpoints/hunyuan3d-dit-v2-mv_fp16.safetensors
+
+# Utility models
+upscale_models/*
+SEEDVR2/*
+ultralytics/*

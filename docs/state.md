@@ -17,7 +17,7 @@ cannot coexist on clio (an OOM freezes the box). The systemd units declare `Conf
 so starting one stops the other atomically:
 
 ```bash
-clusterctl mode clio comfy   # -> ComfyUI at https://clio.cgk.sh/ (local-big goes offline)
+clusterctl mode clio studio  # -> ComfyUI at https://clio.cgk.sh/ (local-big goes offline)
 clusterctl mode clio llm     # -> GPT-OSS-120B back on the gateway (~20 min cold start)
 clusterctl mode clio         # -> prints the current role
 ```
@@ -67,9 +67,11 @@ Full detail: [security.md](security.md).
 - **curl:** `curl http://clio:4000/v1/chat/completions -H "Authorization: Bearer <master key>" -H 'content-type: application/json' -d '{"model":"local-big","messages":[{"role":"user","content":"hi"}]}'`
 - **VS Code:** Continue.dev → model `local-big`, apiBase `http://clio:4000/v1`.
 - **ComfyUI:** `https://clio.cgk.sh/` or `https://urania.cgk.sh/` — client certificate required ([security.md](security.md)). Details: [comfyui-deployed.md](comfyui-deployed.md).
+- **Profiles (2026-10-18):** ComfyUI runs as **studio** (default, `:443`, curated models, the animation
+  work) or **private** (`:8443`, `private-*` cert only, the original basedir). [comfyui-profiles.md](comfyui-profiles.md).
 
 ## Control (from ceres)
-`clusterctl status | models | serve <p> | shard <p> | use <model> | mode <node> [llm|comfy|off] | comfyui up|down [clio|urania] | nginx deploy|status | lan-mtu <mtu> | logs <svc> [node]`
+`clusterctl status | models | serve <p> | shard <p> | use <model> | mode <node> [llm|studio|private|off] | comfyui up|down|sync [clio|urania] | nginx deploy|status | lan-mtu <mtu> | logs <svc> [node]`
 `clio-pki init | server <node> | client <name> | list`
 
 ## Open items (yours, no rush)

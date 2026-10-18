@@ -159,10 +159,13 @@ Writes `~/.clio/claude-code.env`. Then `source ~/.clio/claude-code.env` in the s
 - `clusterctl use claude` (or `max`) → **unsets** those, so Claude Code falls back to your **Max
   subscription** (no API key, no metered cost). This is the spillover path.
 
-### `clusterctl mode <node> [llm|comfy|off]` — swap a node's role
+### `clusterctl mode <node> [llm|studio|private|off]` — swap a node's role
 A node has **one** 119 GiB unified-memory pool shared by CPU and GPU, so it can host a vLLM model
 server **or** ComfyUI, never both (an OOM here freezes the box). `mode` is the switch:
-- `mode clio comfy` → starts `clio-comfyui`; systemd stops `clio-vllm` first.
+- `mode clio studio` → starts `clio-comfyui` as the **studio** profile; stops vLLM first. (`comfy`
+  is an alias for `studio`.)
+- `mode clio private` → the same container as the **private** profile, on `:8443`. See
+  [comfyui-profiles.md](comfyui-profiles.md).
 - `mode clio llm` → starts `clio-vllm` (model per `/opt/clio/active-profile.env`); stops ComfyUI.
 - `mode clio off` → stops both, leaving the pool free.
 - `mode clio` (no role) → prints the node's current role.
@@ -180,8 +183,10 @@ server **or** ComfyUI, never both (an OOM here freezes the box). `mode` is the s
 Cost of a swap: ComfyUI is up in seconds; coming back to `llm` pays the model's cold start (~20 min
 for GPT-OSS-120B, mostly JIT + CUDA-graph capture).
 
-### `clusterctl comfyui up|down`
-Starts/stops `clio-comfyui` on both nodes (UI on `:8188` each), or one with `comfyui up clio`. Same
+### `clusterctl comfyui up|down|sync`
+Starts/stops `clio-comfyui` on both nodes, each in its current profile, or one with `comfyui up clio`.
+`sync` pushes the profile files and rebuilds the studio's model list (after editing
+`cluster/comfyui/studio-models.txt`) without a full repo sync. Same
 `Conflicts=` applies — bringing ComfyUI up stops any vLLM server on that node. For parallel jobs
 across both, add **ComfyUI-Distributed** via the in-app Manager (host on clio, urania as a Remote
 worker) — see [comfyui.md](comfyui.md).
