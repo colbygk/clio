@@ -1,0 +1,272 @@
+# ep01 shot list — derived from script.fountain, then edited by hand. The source of truth for every
+# downstream tool: bin/keys (key frames), bin/tween (motion between them), bin/sound (voice, foley,
+# music) and bin/scratch (the Scratch project). Change a word here to re-direct a shot.
+#
+# Per shot:
+#   id         s010, s020 … (gaps leave room to insert shots)
+#   set        a [sets.*] entry below
+#   seconds    on-screen duration; the timeline is the running sum
+#   camera     wide | medium | close | extreme_close, plus optional move: "pan_right", "push_in", "shake"
+#   cast       characters in frame: "<character>:<variant>" — character packages in ../../characters/
+#   keys       key frames, in order. `at` is seconds into the shot; `pose` is what bin/keys directs.
+#              Two keys = one in-between (bin/tween runs first->last frame between each pair).
+#   action     the motion between keys, in words — what the in-between is directed with
+#   lines      dialogue: who, text, `at` (seconds into the shot), how (delivery note)
+#   sfx        sound cues: what, `at`; foley is generated to match, or Scratch plays it at that time
+#   music      cue name from [music.*], starting at this shot
+#   transition how this shot leaves: cut (default) | match_dissolve | fade_out
+
+[meta]
+title = "The Third Eye (test scene)"
+fps = 16                 # Wan 2.2 A14B native; assembly interpolates to 24 if wanted
+aspect = "16:9"
+scratch_stage = [480, 360]   # Scratch's fixed stage; frames are letterboxed into it
+
+# ---- characters this episode needs ------------------------------------------------------------
+# The variant names here must exist in each package's character.toml.
+#   cat:kitten2eye   young Codubee, two eyes (NEW variant — bigger head, shorter legs)
+#   cat:2eye         teen Codubee before the change (exists: head only so far)
+#   cat:3eye         teen Codubee after (exists: head + standing front)
+#   friend:teen      NEW character package — not designed yet
+#   dog              never drawn as a character: a cast shadow only (a set element)
+
+# ---- sets ------------------------------------------------------------------------------------
+[sets.garden_morning]
+describe = "back garden, tall grass and a few dandelions, morning sunlight"
+[sets.alley_dusk]
+describe = "narrow alley at dusk between wooden board fences, fallen leaves; a gap under one fence"
+[sets.yard_dusk]
+describe = "small yard on the far side of the fence at dusk; later light rain"
+
+[music.play]
+describe = "light, curious, plucked — kitten play"
+[music.dread]
+describe = "low pulse that rises under the chase, cuts out on the shove"
+[music.silence]
+describe = "nothing: the chase music cuts out"
+[music.after]
+describe = "a single sustained tone, almost silence; one soft melodic phrase as the tear falls"
+
+# ================================================================== EXT. BACK GARDEN - MORNING
+[[shots]]
+id = "s010"
+set = "garden_morning"
+seconds = 5
+camera = "wide"
+cast = ["cat:kitten2eye"]
+music = "play"
+keys = [
+  { at = 0.0, pose = "crouched in tall grass, rear up, tail twitching, watching a moth above" },
+  { at = 2.0, pose = "mid-air pounce, all four paws reaching for the moth" },
+  { at = 5.0, pose = "on its back in the grass after tumbling, paws up, delighted" },
+]
+action = "the kitten pounces at the moth, misses, tumbles over in the grass and springs back up"
+sfx = [{ what = "moth wings flutter", at = 0.5 }, { what = "soft thump and grass rustle", at = 3.0 }]
+
+[[shots]]
+id = "s020"
+set = "garden_morning"
+seconds = 5
+camera = "medium"
+cast = ["cat:kitten2eye"]
+keys = [
+  { at = 0.0, pose = "sitting up, batting a dandelion clock with one paw" },
+  { at = 3.0, pose = "the dandelion bursts into a cloud of seeds around the kitten's face, eyes wide with joy" },
+]
+action = "the kitten bats the dandelion until it bursts into seeds"
+lines = [{ who = "cat", text = "Again!", at = 3.5, how = "giggling, tiny voice" }]
+sfx = [{ what = "soft puff of seeds", at = 3.0 }]
+
+[[shots]]
+id = "s030"
+set = "garden_morning"
+seconds = 3
+camera = "close"
+move = "tilt_up"
+cast = []
+keys = [
+  { at = 0.0, pose = "dandelion seeds drifting upward against the sky" },
+  { at = 3.0, pose = "the seeds have become falling leaves against a dusk sky" },
+]
+action = "seeds drift upward and turn into falling leaves as the light goes from morning to dusk"
+transition = "match_dissolve"
+
+# ================================================================== EXT. ALLEY - DUSK
+[[shots]]
+id = "s040"
+set = "alley_dusk"
+seconds = 5
+camera = "wide"
+move = "pan_right"
+cast = ["cat:2eye", "friend:teen"]
+music = "dread"
+keys = [
+  { at = 0.0, pose = "two lanky teen cats trotting side by side along the top of a board fence, facing right" },
+  { at = 5.0, pose = "same, shoulders bumping playfully" },
+]
+action = "they trot along the fence top and bump shoulders, relaxed and close"
+
+[[shots]]
+id = "s050"
+set = "alley_dusk"
+seconds = 3
+camera = "medium"
+cast = ["friend:teen", "cat:2eye"]
+keys = [{ at = 0.0, pose = "Friend turns its head to Codubee with a sly grin" }]
+lines = [{ who = "friend", text = "Race you to the yard.", at = 0.5, how = "teasing" }]
+
+[[shots]]
+id = "s060"
+set = "alley_dusk"
+seconds = 3
+camera = "wide"
+cast = ["cat:2eye", "friend:teen"]
+keys = [
+  { at = 0.0, pose = "both cats freeze on the fence, ears up" },
+  { at = 3.0, pose = "a huge dog's shadow slides across the fence boards below them" },
+]
+action = "a dog's shadow slides along the boards; the cats stiffen"
+sfx = [{ what = "low growl", at = 0.0 }, { what = "barking", at = 1.5 }]
+
+[[shots]]
+id = "s070"
+set = "alley_dusk"
+seconds = 4
+camera = "wide"
+move = "pan_right"
+cast = ["cat:2eye", "friend:teen"]
+keys = [
+  { at = 0.0, pose = "both cats leaping down from the fence into the alley, running right" },
+  { at = 4.0, pose = "both cats sprinting low along the alley, the dog's shadow looming larger behind them" },
+]
+action = "they bolt down the alley; the shadow behind them grows"
+sfx = [{ what = "paws scrabbling on gravel", at = 0.5 }, { what = "barking, closer", at = 1.0 }]
+
+[[shots]]
+id = "s080"
+set = "alley_dusk"
+seconds = 3
+camera = "medium"
+cast = ["cat:2eye", "friend:teen"]
+keys = [
+  { at = 0.0, pose = "a small gap under a fence ahead; Codubee arrives first" },
+  { at = 3.0, pose = "Codubee turns back at the gap, making room for Friend to go first" },
+]
+action = "Codubee reaches the gap first and turns to let Friend through"
+
+[[shots]]
+id = "s090"
+set = "alley_dusk"
+seconds = 2.5
+camera = "medium"
+cast = ["friend:teen", "cat:2eye"]
+keys = [
+  { at = 0.0, pose = "Friend shoulders Codubee hard aside" },
+  { at = 2.5, pose = "Friend's tail vanishing under the fence; Codubee sprawled beside the gap" },
+]
+action = "Friend shoves Codubee aside and slips under the fence alone"
+music = "silence"     # the dread pulse stops dead on the shove
+sfx = [{ what = "thud of a body hitting boards", at = 0.5 }]
+
+[[shots]]
+id = "s100"
+set = "alley_dusk"
+seconds = 3.5
+camera = "medium"
+move = "shake"
+cast = ["cat:2eye"]
+keys = [
+  { at = 0.0, pose = "Codubee skidding, looking back in terror" },
+  { at = 3.5, pose = "Codubee clawing over the top of the fence" },
+]
+action = "Codubee scrambles up the fence boards and over the top, barely"
+sfx = [{ what = "fence boards rattling", at = 0.5 }, { what = "snarl, very close", at = 1.0 }, { what = "claws on wood", at = 1.5 }]
+
+# ================================================================== EXT. YARD - CONTINUOUS
+[[shots]]
+id = "s110"
+set = "yard_dusk"
+seconds = 3
+camera = "medium"
+cast = ["cat:2eye"]
+music = "after"
+keys = [
+  { at = 0.0, pose = "Codubee dropping down from the fence" },
+  { at = 3.0, pose = "Codubee crouched on the ground, panting, safe" },
+]
+action = "Codubee drops to the ground and pants"
+sfx = [{ what = "soft landing", at = 0.6 }, { what = "panting", at = 1.0 }, { what = "barking, muffled behind the fence, fading", at = 1.5 }]
+
+[[shots]]
+id = "s120"
+set = "yard_dusk"
+seconds = 4
+camera = "medium"
+cast = ["friend:teen"]
+keys = [
+  { at = 0.0, pose = "Friend sitting a few feet away, licking a paw, unhurried" },
+  { at = 4.0, pose = "Friend glancing sideways at Codubee with a small satisfied look" },
+]
+action = "Friend licks a paw, then glances over with a small satisfied look"
+sfx = [{ what = "a few soft licks", at = 0.3 }]
+
+[[shots]]
+id = "s130"
+set = "yard_dusk"
+seconds = 3
+camera = "wide"
+cast = ["friend:teen", "cat:2eye"]
+keys = [
+  { at = 0.0, pose = "Friend standing and turning away" },
+  { at = 3.0, pose = "Friend walking off out of frame; Codubee small in the foreground, watching" },
+]
+action = "Friend walks off without a word"
+
+[[shots]]
+id = "s140"
+set = "yard_dusk"
+seconds = 3
+camera = "medium"
+cast = ["cat:2eye"]
+keys = [{ at = 0.0, pose = "Codubee alone, watching the empty yard, breathing" }]
+sfx = [{ what = "breathing", at = 0.0 }]
+
+[[shots]]
+id = "s150"
+set = "yard_dusk"
+seconds = 3
+camera = "close"
+move = "push_in"
+cast = ["cat:2eye"]
+keys = [
+  { at = 0.0, pose = "Codubee's face, two eyes, numb" },
+  { at = 3.0, pose = "Codubee's two eyes widening slightly with understanding" },
+]
+action = "understanding dawns in Codubee's two eyes"
+
+[[shots]]
+id = "s160"
+set = "yard_dusk"
+seconds = 4
+camera = "close"
+cast = ["cat:2eye", "cat:3eye"]   # the hero moment: the variant changes during the shot
+keys = [
+  { at = 0.0, pose = "Codubee's face, two eyes; a thin seam of light appears on the forehead" },
+  { at = 4.0, pose = "the third eye fully open on the forehead for the first time, all three eyes wide" },
+]
+action = "a seam of light on the forehead opens into a third eye"
+sfx = [{ what = "a soft, low shimmer", at = 0.5 }]
+
+[[shots]]
+id = "s170"
+set = "yard_dusk"
+seconds = 5
+camera = "extreme_close"
+cast = ["cat:3eye"]
+keys = [
+  { at = 0.0, pose = "the third eye welling up with a tear; the two lower eyes dry" },
+  { at = 3.0, pose = "a single tear running down from the third eye; first raindrops falling" },
+]
+action = "a single tear runs from the third eye only; rain begins"
+sfx = [{ what = "first raindrops", at = 2.5 }, { what = "rain building", at = 3.5 }]
+transition = "fade_out"

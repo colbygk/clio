@@ -1,10 +1,10 @@
-# The cat — character package. This file is the director's brief for the model sheet: every
+# Codubee (package id "cat") — character package. This file is the director's brief for the model sheet: every
 # generation `bin/sheet` runs is assembled from it, so changing a word here is how a view gets
 # re-directed. Approvals are recorded by the tool in approved.json (don't hand-edit that).
 
 [character]
 id = "cat"
-name = "The cat"
+name = "Codubee"
 # The original drawing. It IS the approved 3-eye head_front; everything descends from it.
 source = "ref/head_front_3eye.png"
 
