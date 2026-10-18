@@ -1,0 +1,132 @@
+#!/usr/bin/env python3.11
+"""sound — the episode's audio from shots.toml: dialogue, sound effects, music (all workflows).
+
+    sound run    ep01 [--only lines|sfx|music] [--redo]
+    sound status ep01
+
+STAND-INS for now, to hear timing end to end. Each is replaceable per cue without touching the rest:
+  lines  macOS `say` voices (Codubee pitched up as a kitten). Later: Colby's recorded takes and his
+         cloned voice for Codubee, local TTS for Friend.
+  sfx    synthesized with ffmpeg from the cue's words (bark, growl, rain …). Later: a local
+         video-to-audio foley model matched to the rendered shots.
+  music  ACE-Step 1.5 on the cluster, one cue per [music.*] span. This one is the real thing.
+Files land in the episode's audio/{lines,sfx,music}/; bin/cut places them on the timeline.
+"""
+import argparse
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline import graphs  # noqa: E402
+from pipeline.comfy import Comfy  # noqa: E402
+from pipeline.episode import Episode  # noqa: E402
+
+SR = 48000
+# who -> (macOS voice, pitch factor). A kitten is the same voice raised.
+VOICES = {"cat": ("Junior", 1.0), "cat:kitten": ("Junior", 1.35), "friend": ("Kathy", 1.0)}
+
+# Keyword -> ffmpeg source expression (aevalsrc / anoisesrc) + filters, and default length.
+# Crude on purpose: they mark WHEN and roughly WHAT, nothing more.
+SFX = [
+    (r"bark", 1.6, "aevalsrc='0.7*sin(2*PI*t*(420-260*mod(t,0.4)))*exp(-10*mod(t,0.4))*lt(mod(t,0.4),0.2)':s={sr}", "lowpass=f=1800"),
+    (r"growl|snarl", 1.8, "anoisesrc=c=brown:a=0.9:r={sr}", "lowpass=f=260,tremolo=f=22:d=0.8,volume=2.2"),
+    (r"flutter|wing", 1.2, "anoisesrc=c=white:a=0.25:r={sr}", "bandpass=f=2200:w=900,tremolo=f=28:d=0.95"),
+    (r"thud|thump|landing|hit", 0.6, "aevalsrc='0.9*sin(2*PI*65*t)*exp(-9*t)':s={sr}", "lowpass=f=300"),
+    (r"rattl|claw|scrabbl|gravel|rustle", 1.4, "anoisesrc=c=pink:a=0.5:r={sr}", "highpass=f=1200,tremolo=f=14:d=0.9"),
+    (r"puff|seed", 0.6, "anoisesrc=c=pink:a=0.35:r={sr}", "lowpass=f=3000,afade=t=out:st=0.1:d=0.5"),
+    (r"lick", 1.0, "anoisesrc=c=white:a=0.3:r={sr}", "highpass=f=3000,tremolo=f=4:d=1.0"),
+    (r"pant|breath", 2.5, "anoisesrc=c=pink:a=0.35:r={sr}", "lowpass=f=1400,tremolo=f=2.4:d=0.95"),
+    (r"shimmer", 2.5, "aevalsrc='0.15*(sin(2*PI*880*t)+sin(2*PI*1320*t)+sin(2*PI*1760*t))*(1+0.3*sin(2*PI*6*t))':s={sr}", "afade=t=in:d=0.8,afade=t=out:st=1.5:d=1"),
+    (r"rain", 6.0, "anoisesrc=c=pink:a=0.4:r={sr}", "highpass=f=900,afade=t=in:d=2"),
+]
+
+
+def ffmpeg(*args):
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *args], check=True)
+
+
+def make_line(ep, shot, n, line, redo):
+    out = ep.path("audio", "lines", f"{shot['id']}_{n}.wav")
+    if out.exists() and not redo:
+        return
+    who = line["who"]
+    if who == "cat" and any(c.endswith("kitten2eye") for c in shot.get("cast", [])):
+        who = "cat:kitten"
+    voice, pitch = VOICES.get(who, ("Samantha", 1.0))
+    aiff = out.with_suffix(".aiff")
+    subprocess.run(["say", "-v", voice, "-o", str(aiff), line["text"]], check=True)
+    ff = f"asetrate={SR}*{pitch},aresample={SR}" if pitch != 1.0 else f"aresample={SR}"
+    ffmpeg("-i", str(aiff), "-af", ff, "-ac", "1", str(out))
+    aiff.unlink()
+    print(f"  line {shot['id']}_{n}: {who} ({voice}) \"{line['text']}\"")
+
+
+def make_sfx(ep, shot, n, cue, redo):
+    out = ep.path("audio", "sfx", f"{shot['id']}_{n}.wav")
+    if out.exists() and not redo:
+        return
+    for pat, secs, src, filt in SFX:
+        if re.search(pat, cue["what"], re.I):
+            if pat == "rain":     # rain runs to the end of the episode
+                secs = max(secs, ep.length - (shot["start"] + cue["at"]))
+            ffmpeg("-f", "lavfi", "-i", src.format(sr=SR), "-t", f"{secs}", "-af",
+                   f"{filt},afade=t=out:st={max(0, secs - 0.3):.2f}:d=0.3", "-ac", "1", str(out))
+            print(f"  sfx  {shot['id']}_{n}: {cue['what']}  [{pat}]")
+            return
+    print(f"  sfx  {shot['id']}_{n}: {cue['what']}  — no stand-in recipe, skipped")
+
+
+def make_music(ep, redo, node):
+    todo = [(cue, start, length) for cue, start, length in ep.music_spans()
+            if redo or not (ep.dir / "audio" / "music" / f"{cue}.flac").exists()]
+    if not todo:
+        return
+    with Comfy(node) as c:
+        for cue, start, length in todo:
+            tags = f"{ep.music[cue]['describe']}, instrumental, gentle animated short film score"
+            seed = random.randrange(1, 2**31)
+            secs = round(length + 1.0, 1)          # a little extra so the cut can fade it out
+            g, _ = graphs.ace_music(tags, secs, seed, f"cat/{ep.id}/music/{cue}")
+            res = c.wait(c.submit(g))
+            c.fetch(res[0], ep.path("audio", "music", f"{cue}.flac"))
+            ep.log(kind="music", cue=cue, seed=seed, tags=tags, seconds=secs, model=graphs.ACE, node=node)
+            print(f"  music {cue}: {secs}s from {start:g}s")
+
+
+def cmd_run(a):
+    ep = Episode(a.episode)
+    for shot in ep.shots:
+        if a.only in (None, "lines"):
+            for n, line in enumerate(shot.get("lines", [])):
+                make_line(ep, shot, n, line, a.redo)
+        if a.only in (None, "sfx"):
+            for n, cue in enumerate(shot.get("sfx", [])):
+                make_sfx(ep, shot, n, cue, a.redo)
+    if a.only in (None, "music"):
+        make_music(ep, a.redo, a.node)
+
+
+def cmd_status(a):
+    ep = Episode(a.episode)
+    for kind in ("lines", "sfx", "music"):
+        d = ep.dir / "audio" / kind
+        print(f"  {kind:6} {len(list(d.glob('*'))) if d.exists() else 0} files")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="sound", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run"); r.add_argument("episode"); r.add_argument("--only", choices=["lines", "sfx", "music"])
+    r.add_argument("--redo", action="store_true")
+    r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
+    s = sub.add_parser("status"); s.add_argument("episode"); s.set_defaults(f=cmd_status)
+    a = p.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

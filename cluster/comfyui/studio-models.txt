@@ -25,3 +25,9 @@ checkpoints/hunyuan3d-dit-v2-mv_fp16.safetensors
 upscale_models/*
 SEEDVR2/*
 ultralytics/*
+
+# Wan 2.2 I2V-A14B 4-step Lightning (lightx2v, via Kijai/WanVideo_comfy): bin/tween
+loras/Wan_2_2_I2V_A14B_*_lightx2v_4step_lora_260412_rank_64_fp16.safetensors
+
+# ACE-Step 1.5 turbo, all-in-one (music): bin/sound
+checkpoints/ace_step_1.5_turbo_aio.safetensors

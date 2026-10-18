@@ -1,0 +1,137 @@
+#!/usr/bin/env python3.11
+"""cut — assemble an episode: in-betweens on the shot list's timeline, plus its audio.
+
+    cut ep01 [--version v1]       -> episodes/ep01/out/ep01_<version>.mp4, published to the gallery
+
+Each shot is its tween clips laid end to end, trimmed or held to exactly the shot's length, scaled
+to 1280x720 at 24 fps. `transition = "match_dissolve"` dissolves into the next shot (1 s);
+`"fade_out"` fades to white. Audio: dialogue and sound effects at their cue times, music cues under
+them, mixed and muxed. A missing clip becomes the shot's held key frame, so a partial episode still
+plays at the right length.
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline.comfy import publish  # noqa: E402
+from pipeline.episode import Episode  # noqa: E402
+
+FPS, W, H = 24, 1280, 720
+DISSOLVE = 1.0
+FADE = 1.5
+LEVELS = {"lines": 1.0, "sfx": 0.7, "music": 0.35}
+
+
+def ffmpeg(*args):
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *args], check=True)
+
+
+def norm(src, secs, out, still=False):
+    """One piece of a shot, exactly `secs` long at FPS and WxH. A clip shorter than `secs` holds its
+    last frame; a still image is held for the whole length."""
+    scale = f"scale={W}:{H}:flags=lanczos,setsar=1,fps={FPS}"
+    if still:
+        ffmpeg("-loop", "1", "-i", str(src), "-t", f"{secs}", "-vf", scale, "-pix_fmt", "yuv420p", str(out))
+    else:
+        ffmpeg("-i", str(src), "-vf", f"{scale},tpad=stop_mode=clone:stop_duration={secs}", "-t", f"{secs}",
+               "-an", "-pix_fmt", "yuv420p", str(out))
+
+
+def render_shot(ep, shot, work, extra=0.0):
+    """The shot as one clip; `extra` seconds of held last frame for a dissolve to eat into."""
+    parts = []
+    segs = ep.segments(shot)
+    for n, (i, j, secs) in enumerate(segs):
+        clip = ep.dir / "tweens" / shot["id"] / f"seg{n}.mp4"
+        part = work / f"{shot['id']}_{n}.mp4"
+        if clip.exists():
+            norm(clip, secs, part)
+        else:
+            norm(ep.dir / "keys" / shot["id"] / f"k{i}.png", secs, part, still=True)
+        parts.append(part)
+    held = shot["seconds"] - sum(s for *_, s in segs) + extra
+    if held > 0.01:      # time after the last key that is too short to animate: hold the last key
+        k = len(shot["keys"]) - 1
+        part = work / f"{shot['id']}_hold.mp4"
+        norm(ep.dir / "keys" / shot["id"] / f"k{k}.png", held, part, still=True)
+        parts.append(part)
+    lst = work / f"{shot['id']}.txt"
+    lst.write_text("".join(f"file '{p}'\n" for p in parts))
+    out = work / f"{shot['id']}.mp4"
+    ffmpeg("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out))
+    return out
+
+
+def audio_events(ep):
+    """[(file, start seconds, level)] for every dialogue line, effect and music cue."""
+    ev = []
+    for shot in ep.shots:
+        for n, line in enumerate(shot.get("lines", [])):
+            ev.append((ep.dir / "audio" / "lines" / f"{shot['id']}_{n}.wav", shot["start"] + line["at"], LEVELS["lines"]))
+        for n, cue in enumerate(shot.get("sfx", [])):
+            ev.append((ep.dir / "audio" / "sfx" / f"{shot['id']}_{n}.wav", shot["start"] + cue["at"], LEVELS["sfx"]))
+    for cue, start, _ in ep.music_spans():
+        ev.append((ep.dir / "audio" / "music" / f"{cue}.flac", start, LEVELS["music"]))
+    return [e for e in ev if e[0].exists()]
+
+
+def cmd_cut(a):
+    ep = Episode(a.episode)
+    work = ep.path("out", "work", "x").parent
+    pieces = []           # (clip, length)
+    shots = ep.shots
+    i = 0
+    while i < len(shots):
+        s = shots[i]
+        if s.get("transition") == "match_dissolve" and i + 1 < len(shots):
+            a_clip = render_shot(ep, s, work, extra=DISSOLVE)
+            b_clip = render_shot(ep, shots[i + 1], work)
+            out = work / f"{s['id']}_x_{shots[i + 1]['id']}.mp4"
+            ffmpeg("-i", str(a_clip), "-i", str(b_clip), "-filter_complex",
+                   f"[0:v][1:v]xfade=transition=fade:duration={DISSOLVE}:offset={s['seconds']}[v]",
+                   "-map", "[v]", "-pix_fmt", "yuv420p", str(out))
+            pieces.append(out)
+            i += 2
+        else:
+            pieces.append(render_shot(ep, s, work))
+            i += 1
+        print(f"  {s['id']} ok")
+    lst = work / "all.txt"
+    lst.write_text("".join(f"file '{p}'\n" for p in pieces))
+    picture = work / "picture.mp4"
+    fade = ""
+    if shots[-1].get("transition") == "fade_out":
+        fade = f"fade=t=out:st={ep.length - FADE}:d={FADE}:color=white"
+    ffmpeg("-f", "concat", "-safe", "0", "-i", str(lst), *(["-vf", fade] if fade else []),
+           "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "18", str(picture))
+
+    ev = audio_events(ep)
+    out = ep.path("out", f"{ep.id}_{a.version}.mp4")
+    if ev:
+        inputs, chains = [], []
+        for n, (f, start, lvl) in enumerate(ev):
+            inputs += ["-i", str(f)]
+            ms = int(start * 1000)
+            chains.append(f"[{n + 1}:a]aresample=48000,pan=stereo|c0=c0|c1=c0,volume={lvl},adelay={ms}|{ms}[a{n}]")
+        mix = "".join(f"[a{n}]" for n in range(len(ev)))
+        graph = ";".join(chains) + f";{mix}amix=inputs={len(ev)}:normalize=0:duration=longest," \
+                                   f"atrim=0:{ep.length},afade=t=out:st={ep.length - FADE}:d={FADE}[aout]"
+        ffmpeg("-i", str(picture), *inputs, "-filter_complex", graph, "-map", "0:v", "-map", "[aout]",
+               "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", f"{ep.length}", str(out))
+    else:
+        out.write_bytes(picture.read_bytes())
+    print(f"  {out.relative_to(REPO)}  ({ep.length:g}s, {len(ev)} audio events)")
+    print(f"view: {publish([out], f'cat/{ep.id}')}{out.name}")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="cut", description=__doc__.split("\n\n")[0])
+    p.add_argument("episode"); p.add_argument("--version", default="v1")
+    cmd_cut(p.parse_args())
+
+
+if __name__ == "__main__":
+    main()

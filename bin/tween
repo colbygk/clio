@@ -1,0 +1,97 @@
+#!/usr/bin/env python3.11
+"""tween — motion between an episode's approved key frames (workflow 3).
+
+    tween run    ep01 [--shots s010,s020] [--node clio] [--note "..."] [--redo]
+    tween status ep01
+
+Each pair of consecutive keys in a shot becomes one clip: Wan 2.2 I2V-A14B with the first AND last
+frame pinned (WanFirstLastFrameToVideo), so every motion starts and ends on a frame Colby approved.
+A shot with one key, or time left after its last key, animates forward from that key alone.
+The shot's `action` (or the next key's pose) and its camera move direct the motion. Clips land in
+the episode's tweens/<shot>/; recipes go to runs.jsonl. AI first — shots that drift fall back to
+the 2D cut-out rig later (docs/animation-pipeline.md).
+"""
+import argparse
+import random
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline import graphs  # noqa: E402
+from pipeline.comfy import Comfy, publish  # noqa: E402
+from pipeline.episode import Episode  # noqa: E402
+
+W, H = 832, 480           # Wan 2.2 A14B's 480p bucket at 16:9; bin/cut upscales
+MOVES = {
+    "pan_right": "The camera pans slowly to the right.",
+    "push_in": "The camera pushes in slowly.",
+    "tilt_up": "The camera tilts slowly upward.",
+    "shake": "The camera shakes with the impact.",
+}
+STYLE = ("A 2D hand-drawn cartoon in black ink on white paper: flat shapes, clean brush-pen lines, "
+         "smooth simple animation. The characters keep exactly their designs, outlines and number "
+         "of eyes in every frame.")
+NEGATIVE = ("colour, realistic, photo, 3d render, shading, extra eyes, extra limbs, morphing, "
+            "melting, flicker, blurry, text, watermark")
+
+
+def clip_path(ep, shot, n):
+    return ep.dir / "tweens" / shot["id"] / f"seg{n}.mp4"
+
+
+def cmd_run(a):
+    ep = Episode(a.episode)
+    made = []
+    with Comfy(a.node) as c:
+        for shot in ep.select(a.shots):
+            for n, (i, j, secs) in enumerate(ep.segments(shot)):
+                out = clip_path(ep, shot, n)
+                if out.exists() and not a.redo:
+                    continue
+                keys = [ep.dir / "keys" / shot["id"] / f"k{k}.png" for k in (i, j) if k is not None]
+                if not all(k.exists() for k in keys):
+                    print(f"  {shot['id']} seg{n}: blocked — key frames not approved")
+                    continue
+                names = [c.upload(k, subfolder=f"cat/{ep.id}/keys", name=f"{shot['id']}_{k.name}") for k in keys]
+                what = shot.get("action") or shot["keys"][j if j is not None else i]["pose"]
+                prompt = " ".join(x for x in (what + ".", MOVES.get(shot.get("move", "")), STYLE, a.note) if x)
+                seed = random.randrange(1, 2**31)
+                frames = graphs.wan_frames(secs)
+                g, _ = graphs.wan_tween(prompt, names[0], names[1] if j is not None else None, seed, W, H,
+                                        frames, f"cat/{ep.id}/tweens/{shot['id']}_seg{n}", NEGATIVE)
+                t0 = time.time()
+                print(f"  {shot['id']} seg{n}: k{i}->{'k' + str(j) if j is not None else 'tail'} {secs:g}s ({frames} frames) ...", end="", flush=True)
+                res = c.wait(c.submit(g))
+                c.fetch(res[0], out)
+                dt = time.time() - t0
+                print(f" {dt:.0f}s")
+                made.append(out)
+                ep.log(kind="tween", shot=shot["id"], seg=n, first=i, last=j, seconds=secs, frames=frames,
+                       seed=seed, prompt=prompt, negative=NEGATIVE, node=a.node, models=graphs.WAN,
+                       size=[W, H], took=round(dt, 1))
+    if made:
+        print(f"view: {publish(made, f'cat/{ep.id}/tweens')}")
+
+
+def cmd_status(a):
+    ep = Episode(a.episode)
+    for shot in ep.shots:
+        marks = "".join("●" if clip_path(ep, shot, n).exists() else "○" for n, _ in enumerate(ep.segments(shot)))
+        print(f"  {shot['id']}  {marks}")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="tween", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run"); r.add_argument("episode"); r.add_argument("--shots"); r.add_argument("--note")
+    r.add_argument("--redo", action="store_true")
+    r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
+    s = sub.add_parser("status"); s.add_argument("episode"); s.set_defaults(f=cmd_status)
+    a = p.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

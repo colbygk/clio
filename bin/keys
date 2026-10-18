@@ -1,0 +1,210 @@
+#!/usr/bin/env python3.11
+"""keys — key frames for an episode, directed by its shots.toml (workflow 2).
+
+    keys sets     ep01                    candidates for every set backdrop (ink line art on white)
+    keys approve-set ep01 alley_dusk 1234 make a backdrop canonical
+    keys run      ep01 [--shots s010,s020] [-n 2] [--note "..."]   candidates for each key frame
+    keys approve  ep01 s010 0 1234        make candidate seed 1234 the canonical key 0 of s010
+    keys auto     ep01                    approve the first candidate of every key not yet approved
+    keys status   ep01
+
+Each key is one image-edit pass conditioned on the approved set backdrop (image 1) and the
+approved sheet art of each cast member (images 2-3), picked to match the pose (pipeline/episode.py
+ref_for). The pose text in shots.toml directs it; --note adds words. Every run publishes a labelled
+contact sheet to https://urania.cgk.sh/outputs/cat/<ep>/review/ and appends its recipe to runs.jsonl.
+"""
+import argparse
+import json
+import random
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline import graphs  # noqa: E402
+from pipeline.comfy import Comfy, publish  # noqa: E402
+from pipeline.episode import Episode  # noqa: E402
+
+W, H = 1280, 720
+FRAMING = {
+    "wide": "a wide shot: the characters are small in the scene and the setting is fully visible",
+    "medium": "a medium shot: the characters fill about half the frame",
+    "close": "a close-up: the face fills most of the frame",
+    "extreme_close": "an extreme close-up on the eyes and forehead",
+}
+STYLE = ("The whole frame is black ink on white paper: no colour, no grey shading, no gradients, "
+         "no text. Keep each character's design exactly as in its reference image: same shapes, same "
+         "eyes, same outline.")
+NEGATIVE = "colour, grey shading, gradient, photo, realistic, 3d render, text, watermark, extra limbs"
+SET_PROMPT = ("Image 1 is a blank page. Draw on it the empty background of one animation frame: {d}. "
+              "Loose black brush-pen ink line art on white paper, like a quick confident sketch: no "
+              "fill, no shading, no grey, no colour, and the sky is plain white paper. The place is "
+              "completely EMPTY: no people, no children, no animals, no figures of any kind, no text. "
+              "A wide 16:9 composition with open, empty ground in the middle.")
+SET_NEGATIVE = "people, person, child, man, woman, animal, cat, dog, figure, character, colour, coloured sky, sunset colours, gradient, grey shading, text"
+
+
+def blank(ep):
+    p = ep.path("refs", "blank.png")
+    if not p.exists():
+        subprocess.run(["magick", "-size", f"{W}x{H}", "xc:white", str(p)], check=True)
+    return p
+
+
+def contact(ep, label, tiles):
+    out = ep.path("review", f"{label}_{time.strftime('%Y%m%d-%H%M%S')}.png")
+    args = []
+    for name, path in tiles:
+        args += ["-label", name, str(path)]
+    subprocess.run(["magick", "montage", "-font", "/System/Library/Fonts/Supplemental/Arial.ttf",
+                    "-pointsize", "22", *args, "-resize", "480x270", "-tile", "4x", "-geometry", "+8+8",
+                    str(out)], check=True)
+    return publish([out], f"cat/{ep.id}/review") + out.name
+
+
+def generate(c, ep, prompt, refs, seed, prefix, negative=NEGATIVE):
+    names = [c.upload(r, subfolder=f"cat/{ep.id}/refs", name=f"{r.parent.name}_{r.name}") for r in refs]
+    g, _ = graphs.qwen_edit(prompt, names, seed, W, H, prefix, negative=negative)
+    return c.wait(c.submit(g))[0], names
+
+
+def cmd_sets(a):
+    ep = Episode(a.episode)
+    tiles = []
+    with Comfy(a.node) as c:
+        for name, s in ep.sets.items():
+            if ep.dir.joinpath("sets", f"{name}.png").exists() and not a.redo:
+                continue
+            prompt = SET_PROMPT.format(d=s["describe"]) + (f" {a.note}" if a.note else "")
+            for _ in range(a.n):
+                seed = random.randrange(1, 2**31)
+                out, _ = generate(c, ep, prompt, [blank(ep)], seed, f"cat/{ep.id}/sets/{name}_s{seed}", SET_NEGATIVE)
+                local = c.fetch(out, ep.path("candidates", "sets", name, f"{seed}.png"))
+                tiles.append((f"{name} {seed}", local))
+                ep.log(kind="set", set=name, seed=seed, prompt=prompt, node=a.node)
+                print(f"  {name} seed {seed}")
+    if tiles:
+        print(f"review: {contact(ep, 'sets', tiles)}")
+
+
+def cmd_approve_set(a):
+    ep = Episode(a.episode)
+    src = ep.dir / "candidates" / "sets" / a.set / f"{a.seed}.png"
+    shutil.copyfile(src, ep.path("sets", f"{a.set}.png"))
+    print(f"approved set {a.set} = {a.seed}")
+
+
+def key_path(ep, shot, k):
+    return ep.dir / "keys" / shot["id"] / f"k{k}.png"
+
+
+def direction(ep, shot, key):
+    cast = key.get("cast", shot.get("cast", []))
+    refs = [ep.dir / "sets" / f"{shot['set']}.png"]
+    if not refs[0].exists():
+        raise LookupError(f"set {shot['set']} not approved yet (keys sets / approve-set)")
+    who = []
+    for i, member in enumerate(cast[:2], start=2):
+        img, view = ep.ref_for(member, key["pose"], shot.get("camera", ""))
+        refs.append(img)
+        name, desc = ep.describe(member)
+        who.append(f"{desc}, drawn exactly like the character in image {i}")
+    parts = [f"Image 1 is the background scene. Redraw it as the backdrop of one animation frame, "
+             f"framed as {FRAMING.get(shot.get('camera', 'medium'), 'a medium shot')}, keeping its "
+             f"ink line-art style."]
+    if who:
+        parts.append("In the scene: " + "; and ".join(who) + ".")
+    parts += [f"What is happening: {key['pose']}.", STYLE]
+    neg = NEGATIVE
+    if any(ep.parse_cast(m)[1] in ("2eye", "kitten2eye") for m in cast):
+        neg += ", third eye, eye on forehead"
+    return " ".join(parts), neg, refs
+
+
+def cmd_run(a):
+    ep = Episode(a.episode)
+    tiles = []
+    with Comfy(a.node) as c:
+        for shot in ep.select(a.shots):
+            for k, key in enumerate(shot.get("keys", [])):
+                if key_path(ep, shot, k).exists() and not a.redo:
+                    continue
+                try:
+                    prompt, neg, refs = direction(ep, shot, key)
+                except LookupError as e:
+                    print(f"  {shot['id']} k{k}: blocked — {e}")
+                    continue
+                if a.note:
+                    prompt += f" {a.note}"
+                for _ in range(a.n):
+                    seed = random.randrange(1, 2**31)
+                    t0 = time.time()
+                    out, names = generate(c, ep, prompt, refs, seed, f"cat/{ep.id}/keys/{shot['id']}_k{k}_s{seed}", neg)
+                    local = c.fetch(out, ep.path("candidates", shot["id"], f"k{k}", f"{seed}.png"))
+                    tiles.append((f"{shot['id']} k{k} {seed}", local))
+                    ep.log(kind="key", shot=shot["id"], key=k, seed=seed, prompt=prompt, negative=neg,
+                           refs=[str(r.relative_to(REPO)) for r in refs], node=a.node,
+                           models=graphs.QWEN_EDIT, seconds=round(time.time() - t0, 1))
+                    print(f"  {shot['id']} k{k} seed {seed}  {time.time() - t0:.0f}s")
+    if tiles:
+        for i in range(0, len(tiles), 16):    # one sheet per 16 candidates keeps them legible
+            print(f"review: {contact(ep, f'keys_{i // 16:02d}', tiles[i:i + 16])}")
+
+
+def approve(ep, shot, k, seed):
+    src = ep.dir / "candidates" / shot["id"] / f"k{k}" / f"{seed}.png"
+    dest = key_path(ep, shot, k)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    ep.log(kind="approve-key", shot=shot["id"], key=k, seed=seed)
+
+
+def cmd_approve(a):
+    ep = Episode(a.episode)
+    approve(ep, ep.shot(a.shot), a.key, a.seed)
+    print(f"approved {a.shot} k{a.key} = {a.seed}")
+
+
+def cmd_auto(a):
+    ep = Episode(a.episode)
+    for shot in ep.shots:
+        for k, _ in enumerate(shot.get("keys", [])):
+            cands = sorted((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png"), key=lambda f: f.stat().st_mtime)
+            if not key_path(ep, shot, k).exists() and cands:
+                approve(ep, shot, k, cands[0].stem)
+                print(f"  {shot['id']} k{k} = {cands[0].stem}")
+
+
+def cmd_status(a):
+    ep = Episode(a.episode)
+    for name in ep.sets:
+        print(f"  set {name:18} {'approved' if (ep.dir / 'sets' / f'{name}.png').exists() else '-'}")
+    for shot in ep.shots:
+        marks = "".join("●" if key_path(ep, shot, k).exists() else "○" for k, _ in enumerate(shot.get("keys", [])))
+        print(f"  {shot['id']}  {marks}")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="keys", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("sets"); s.add_argument("episode"); s.add_argument("-n", type=int, default=2)
+    s.add_argument("--note"); s.add_argument("--redo", action="store_true")
+    s.add_argument("--node", default="urania", choices=["urania", "clio"]); s.set_defaults(f=cmd_sets)
+    s = sub.add_parser("approve-set"); s.add_argument("episode"); s.add_argument("set"); s.add_argument("seed", type=int)
+    s.set_defaults(f=cmd_approve_set)
+    r = sub.add_parser("run"); r.add_argument("episode"); r.add_argument("--shots"); r.add_argument("-n", type=int, default=2)
+    r.add_argument("--note"); r.add_argument("--redo", action="store_true")
+    r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
+    ap = sub.add_parser("approve"); ap.add_argument("episode"); ap.add_argument("shot"); ap.add_argument("key", type=int)
+    ap.add_argument("seed", type=int); ap.set_defaults(f=cmd_approve)
+    au = sub.add_parser("auto"); au.add_argument("episode"); au.set_defaults(f=cmd_auto)
+    st = sub.add_parser("status"); st.add_argument("episode"); st.set_defaults(f=cmd_status)
+    a = p.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

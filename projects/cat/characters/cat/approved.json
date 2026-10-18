@@ -1,14 +1,20 @@
 {
   "2eye": {
+    "body_quadruped_side": "sheet/2eye/body_quadruped_side.png",
+    "body_sit_front": "sheet/2eye/body_sit_front.png",
     "head_front": "sheet/2eye/head_front.png"
   },
   "3eye": {
     "body_biped_front": "sheet/3eye/body_biped_front.png",
+    "body_quadruped_side": "sheet/3eye/body_quadruped_side.png",
     "body_sit_front": "sheet/3eye/body_sit_front.png"
   },
   "_seeds": {
     "body_biped_front@3eye": 621705445,
-    "body_sit_front@3eye": 2132751763,
+    "body_quadruped_side@2eye": 878293764,
+    "body_quadruped_side@3eye": 330622681,
+    "body_sit_front@2eye": 370348026,
+    "body_sit_front@3eye": 2057634610,
     "head_front@2eye": 791150487,
     "head_front@kitten2eye": 1189329613
   },

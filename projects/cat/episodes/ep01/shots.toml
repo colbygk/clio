@@ -8,7 +8,8 @@
 #   seconds    on-screen duration; the timeline is the running sum
 #   camera     wide | medium | close | extreme_close, plus optional move: "pan_right", "push_in", "shake"
 #   cast       characters in frame: "<character>:<variant>" — character packages in ../../characters/
-#   keys       key frames, in order. `at` is seconds into the shot; `pose` is what bin/keys directs.
+#   keys       key frames, in order. `at` is seconds into the shot; `pose` is what bin/keys directs;
+#              an optional per-key `cast` overrides the shot's (s160: the variant changes mid-shot).
 #              Two keys = one in-between (bin/tween runs first->last frame between each pair).
 #   action     the motion between keys, in words — what the in-between is directed with
 #   lines      dialogue: who, text, `at` (seconds into the shot), how (delivery note)
@@ -36,7 +37,7 @@ describe = "back garden, tall grass and a few dandelions, morning sunlight"
 [sets.alley_dusk]
 describe = "narrow alley at dusk between wooden board fences, fallen leaves; a gap under one fence"
 [sets.yard_dusk]
-describe = "small yard on the far side of the fence at dusk; later light rain"
+describe = "small yard on the far side of the fence at dusk"   # the rain is directed in s170, not the set
 
 [music.play]
 describe = "light, curious, plucked — kitten play"
@@ -251,8 +252,8 @@ seconds = 4
 camera = "close"
 cast = ["cat:2eye", "cat:3eye"]   # the hero moment: the variant changes during the shot
 keys = [
-  { at = 0.0, pose = "Codubee's face, two eyes; a thin seam of light appears on the forehead" },
-  { at = 4.0, pose = "the third eye fully open on the forehead for the first time, all three eyes wide" },
+  { at = 0.0, cast = ["cat:2eye"], pose = "Codubee's face, two eyes; a thin seam of light appears on the forehead" },
+  { at = 4.0, cast = ["cat:3eye"], pose = "the third eye fully open on the forehead for the first time, all three eyes wide" },
 ]
 action = "a seam of light on the forehead opens into a third eye"
 sfx = [{ what = "a soft, low shimmer", at = 0.5 }]

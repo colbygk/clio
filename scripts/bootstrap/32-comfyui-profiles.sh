@@ -54,8 +54,9 @@ while read -r pat; do
   done
   [ "$found" = 1 ] || warn "studio-models.txt: nothing in the store matches '$pat'"
 done < "$LIST"
-find "$S/models" -type d -empty -delete 2>/dev/null || true
-mkdir -p "$S/models"
+# Keep every model folder the store has, even when empty. ComfyUI records the folders it saw at
+# startup and fails any node that lists them (e.g. VAELoader -> vae_approx) if one disappears.
+for d in "$B/models"/*/; do mkdir -p "$S/models/$(basename "$d")"; done
 chown -R -h 1000:1000 "$S/models"
 log "Studio sees $n model entries"
 

@@ -78,13 +78,16 @@ class Comfy:
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         for _ in range(100):
             if self.proc.poll() is not None:
-                raise RuntimeError(f"ssh tunnel to {self.host} failed: {self.proc.stderr.read().decode()}")
+                err = self.proc.stderr.read().decode().strip() or "no message"
+                raise RuntimeError(f"ssh tunnel to {self.host} exited {self.proc.returncode}: {err}")
             try:
                 self.get("/system_stats")
                 return self
             except OSError:
                 time.sleep(0.1)
-        raise RuntimeError(f"ComfyUI on {self.node} not answering (is it in comfy mode?)")
+        # Close this attempt's tunnel before the caller retries, or it outlives the script.
+        self.proc.terminate()
+        raise RuntimeError(f"ComfyUI on {self.node} not answering (is it in studio mode?)")
 
     def __exit__(self, *exc):
         if self.proc:

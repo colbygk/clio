@@ -21,3 +21,12 @@ projects/*/characters/*/3d/*
 !projects/*/characters/*/3d/build.json
 # macOS Finder metadata
 .DS_Store
+# Episode media is regenerable from shots.toml + runs.jsonl; only the script, shot list and recipes are canon
+projects/*/episodes/*/candidates/
+projects/*/episodes/*/keys/
+projects/*/episodes/*/sets/
+projects/*/episodes/*/refs/
+projects/*/episodes/*/review/
+projects/*/episodes/*/tweens/
+projects/*/episodes/*/audio/
+projects/*/episodes/*/out/
