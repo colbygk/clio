@@ -11,7 +11,7 @@ fabric) from one machine (**ceres**), with minimal effort to switch models and f
 
 > **What's running right now → [`docs/state.md`](docs/state.md)** (live topology, endpoints, how to
 > use it). Current deployment is a **split**: clio = GPT-OSS-120B (`local-big`) + gateway **or**
-> ComfyUI (`clusterctl mode clio llm|comfy` — they're mutually exclusive); urania = ComfyUI with 6
+> ComfyUI (`clusterctl mode clio llm|studio|private` — they're mutually exclusive); urania = ComfyUI with 6
 > image/video workflows ([`docs/comfyui-deployed.md`](docs/comfyui-deployed.md)).
 >
 > New here? `docs/state.md` for current reality, then `docs/architecture.md` (design),
@@ -55,10 +55,14 @@ clusterctl comfyui down
 clio-pki client <device>           # enroll a device (issues a .p12 to install)
 clusterctl nginx deploy|status     # push certs + nginx config / check the posture
 
+# ComfyUI runs as studio (animation work) or private (personal) — docs/comfyui-profiles.md:
+clusterctl mode urania studio      # https://urania.cgk.sh/        (the default)
+clusterctl mode urania private     # https://urania.cgk.sh:8443/   (private-* certificate only)
+
 # Swap a node between serving a model and running ComfyUI (they can't share the memory pool):
-clusterctl mode clio comfy         # stops clio-vllm, starts ComfyUI
+clusterctl mode clio studio        # stops clio-vllm, starts ComfyUI (studio)
 clusterctl mode clio llm           # stops ComfyUI, starts vLLM (pays the model cold start)
-clusterctl mode clio               # what is clio doing right now?
+clusterctl mode clio               # what is clio doing right now? (studio, private, llm or off)
 
 # Fabric / debugging:
 clusterctl nccl-test               # RoCE bandwidth across the fabric

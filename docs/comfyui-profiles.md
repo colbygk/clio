@@ -15,9 +15,43 @@ on, or showing someone, the animation project.
 | Models | curated: `cluster/comfyui/studio-models.txt` | the full store |
 | Assets index | `studio/user/comfyui.db` | `basedir/user/comfyui.db` |
 
-Switch with `clusterctl mode <node> studio|private` (`comfy` still works and means `studio`). Only
-one profile runs at a time per node: same unified-memory reason as llm vs comfy. The door for the
-profile that is not running answers with the "ComfyUI is not answering" page.
+Only one profile runs at a time per node: same unified-memory reason as llm vs comfy. The door for
+the profile that is not running answers with the "ComfyUI is not answering" page.
+
+## How to switch
+
+Run these on ceres. Switching takes about a minute; the job queue is not carried over, so let
+running jobs finish first.
+
+```bash
+# What is each node running right now? (prints studio, private, llm or off)
+clusterctl mode urania
+clusterctl mode clio
+
+# Private work on urania  ->  open https://urania.cgk.sh:8443/
+clusterctl mode urania private
+
+# Back to the animation work  ->  open https://urania.cgk.sh/
+clusterctl mode urania studio
+
+# Same for clio (this also stops the GPT-OSS model server if it was running)
+clusterctl mode clio private
+clusterctl mode clio studio
+
+# Free the node entirely
+clusterctl mode urania off
+```
+
+The profile sticks: after a reboot ComfyUI stays off, and the next `clusterctl comfyui up` starts
+each node in whatever profile it was last switched to. Before showing anyone your screen, run `clusterctl mode <node>` to check
+that both nodes say `studio`.
+
+Other everyday commands:
+
+```bash
+clusterctl comfyui sync          # after editing cluster/comfyui/studio-models.txt
+clusterctl logs comfyui urania   # if a page says ComfyUI is not answering
+```
 
 ## Every place a file can surface, and how each is closed
 
