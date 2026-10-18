@@ -1,0 +1,81 @@
+# Friend — character package. The director's brief for bin/sheet, like ../cat/character.toml.
+#
+# DESIGN INTENT (Colby, 2026-10-18): Friend is deliberately NOT a particular cat — it could be
+# anyone, even family. So unlike Codubee, Friend is allowed to vary from shot to shot:
+#   - mostly suggestion: a white cat drawn in loose, incomplete black brush-pen lines, no fixed
+#     markings, almost no face; at a distance or in motion just a pale shape, or a shadow
+#   - specific only where the story needs a face: the sly grin, the shove, the satisfied look
+#   - (idea to try, not a rule) its lines thin to a shadow as it walks away at the end
+# This sheet therefore pins down only what must stay recognisable — the line quality, the build,
+# the face in its few specific moments — not exact markings.
+
+[character]
+id = "friend"
+name = "Friend"
+# No source drawing: head_front is designed here. Image 1 for it is Codubee's head, used only as a
+# STYLE reference (brush-pen line quality, proportions of the world), not as the cat to draw.
+
+[style]
+prompt = """Drawn in the same hand-drawn brush-pen style as image 1, but this is a DIFFERENT cat: \
+a WHITE cat. Its body is the white of the paper, defined only by loose, confident black brush-pen \
+lines that are slightly broken and incomplete in places, as if quickly sketched. No fill, no fur \
+texture, no shading, no grey, no colour, no markings or spots. The face is minimal: two small \
+black eyes and the barest hint of a nose. Plain white background. Single character, centred, whole \
+figure visible, nothing cropped."""
+negative = "black cat, solid black fill, three eyes, fur texture, shading, gradient, grey, colour, spots, stripes, realistic, 3d render, photo, text, watermark, multiple cats, cropped"
+
+[variants.teen]
+# No eye check: count_eyes is tuned for white eyes in a black head, and Friend is the inverse.
+
+# ---- views -------------------------------------------------------------------------------------
+[[views]]
+id = "head_front"
+group = "head"
+refs = ["../cat/ref/head_front_3eye.png"]
+size = [1024, 1024]
+prompt = """Draw the head of a lanky teenage white cat, facing the viewer, with a calm, \
+unreadable expression. Ears tall and a little pointed. The same framing as image 1."""
+
+[[views]]
+id = "body_quadruped_side"
+group = "body"
+refs = ["@head_front"]
+size = [1216, 832]
+prompt = """Draw the full body of the white cat from image 1 trotting on all four legs, seen from \
+the side and facing right, lanky teenage build, long thin tail held low. The head is the head from \
+image 1."""
+
+[[views]]
+id = "body_sit_front"
+group = "body"
+refs = ["@head_front"]
+size = [1024, 1024]
+prompt = """Draw the full body of the white cat from image 1 sitting upright like a house cat, \
+seen from the front, tail curled around its feet. The head is the head from image 1."""
+
+# The moments where Friend becomes specific.
+[[views]]
+id = "expr_sly"
+group = "expression"
+refs = ["@head_front"]
+size = [1024, 1024]
+prompt = """Change only the expression of the white cat in image 1: a sly, teasing half-smile, \
+eyes narrowed slightly, head tilted. Same head, same framing."""
+
+[[views]]
+id = "expr_satisfied"
+group = "expression"
+refs = ["@head_front"]
+size = [1024, 1024]
+prompt = """Change only the expression of the white cat in image 1: a small, cold, satisfied look, \
+eyelids half lowered, glancing sideways out of the corner of its eyes. Same head, same framing."""
+
+# The abstract end of Friend: the same cat reduced to a shadow, as it appears at a distance.
+[[views]]
+id = "shadow_side"
+group = "abstract"
+refs = ["@body_quadruped_side"]
+size = [1216, 832]
+prompt = """Reduce the white cat in image 1 to only its shadow: a soft-edged grey-black cast shadow \
+of the same trotting cat on plain white ground, no lines, no eyes, no cat visible — only the \
+shadow shape."""

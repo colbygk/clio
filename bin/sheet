@@ -86,14 +86,17 @@ class Package:
         self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
 
     def approved(self, view, variant):
-        if view == "head_front" and variant == self.base:
+        # A character drawn by Colby starts from that drawing; one without a `source` is designed
+        # here, and its head_front is generated and approved like any other view.
+        if view == "head_front" and variant == self.base and "source" in self.spec["character"]:
             return self.dir / self.spec["character"]["source"]
         rel = self.state.get(variant, {}).get(view)
         return self.dir / rel if rel else None
 
     def resolve_ref(self, ref, variant):
         if ref == "source":
-            return self.dir / self.spec["character"]["source"]
+            src = self.spec["character"].get("source")
+            return self.dir / src if src else None
         if ref.startswith("@"):
             return self.approved(ref[1:], variant)
         return self.dir / ref   # a file in the package, e.g. ref/style_outline_....png
@@ -111,7 +114,7 @@ class Package:
         refs = [self.resolve_ref(r, variant) for r in v.get("refs", ["source"])]
         missing = [r for r, p in zip(v.get("refs", []), refs) if p is None]
         if missing:
-            raise Blocked(f"needs {', '.join(m[1:] for m in missing)}@{variant} approved first")
+            raise Blocked(f"needs {', '.join(m.lstrip('@') for m in missing)}@{variant} approved first")
         neg = ", ".join(x for x in (style.get("negative"), var.get("negative")) if x)
         outline = style.get("outlines", {}).get(outline or style.get("outline"), "")
         eyes = var.get("profile") if v.get("angle") == "profile" else var.get("describe")

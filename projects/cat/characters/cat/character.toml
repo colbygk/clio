@@ -65,6 +65,18 @@ area with solid black so the forehead matches the rest of the head. Keep the two
 pose, the proportions and everything else exactly the same."""
 negative = "third eye, three eyes, eye on forehead"
 
+# Young Codubee (ep01 opening), two eyes. Derived per view from the approved 2eye image, so the
+# kitten is the same character, younger — never designed separately (Colby, 2026-10-18).
+[variants.kitten2eye]
+eyes = 2
+derive_from = "2eye"
+profile_eyes = 1
+prompt = """Redraw the cat in image 1 as a young kitten of the same cat: a bigger, rounder head \
+relative to the body, larger eyes, shorter and softer legs, a short body, small paws and a thinner, \
+shorter tail. Same flat solid black shapes, same two white eyes with slit pupils, same white \
+triangular nose, same whiskers, same pose and the same framing. Exactly two eyes."""
+negative = "third eye, three eyes, eye on forehead, adult cat, long legs"
+
 # ---- views -------------------------------------------------------------------------------------
 # refs: "source" = the original drawing; "@<view>" = the approved image of that view (same
 # variant). A view whose @refs aren't approved yet is blocked — that's the point: approvals chain.
