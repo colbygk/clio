@@ -21,7 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from pipeline import graphs  # noqa: E402
-from pipeline.comfy import Comfy, inventory  # noqa: E402
+from pipeline.comfy import Comfy, inventory, publish as comfy_publish  # noqa: E402
 
 BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
 NOTAIL = ("Remove the tail and the whiskers from the cat in image 1. Where the tail overlapped the "
@@ -80,14 +80,8 @@ def cmd_turnaround(a):
 
 
 def publish(character, files):
-    """Blender renders on ceres; copy them into urania's studio output/ so the /outputs/ gallery
-    (same client cert as ComfyUI) shows them next to the sheet candidates."""
-    inv = inventory()
-    host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/studio/output/{character}/3d"
-    ssh = ["-o", "BatchMode=yes", "-i", inv["SSH_KEY"]]
-    subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {dest}"], check=True)
-    subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{dest}/"], check=True)
-    print(f"  view: https://{host}/outputs/{character}/3d/")
+    """Blender renders on ceres; publish them next to the sheet candidates in the /outputs/ gallery."""
+    print(f"  view: {comfy_publish(files, f'{character}/3d')}")
 
 
 def struct_size(p):

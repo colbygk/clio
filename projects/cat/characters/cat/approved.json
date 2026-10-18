@@ -3,10 +3,16 @@
     "head_front": "sheet/2eye/head_front.png"
   },
   "3eye": {
-    "body_biped_front": "sheet/3eye/body_biped_front.png"
+    "body_biped_front": "sheet/3eye/body_biped_front.png",
+    "body_sit_front": "sheet/3eye/body_sit_front.png"
   },
   "_seeds": {
     "body_biped_front@3eye": 621705445,
-    "head_front@2eye": 791150487
+    "body_sit_front@3eye": 2132751763,
+    "head_front@2eye": 791150487,
+    "head_front@kitten2eye": 1189329613
+  },
+  "kitten2eye": {
+    "head_front": "sheet/kitten2eye/head_front.png"
   }
 }

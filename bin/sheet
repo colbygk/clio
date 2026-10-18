@@ -8,12 +8,14 @@
     sheet run      cat --all                    every runnable, unapproved view
     sheet run      cat body_biped_front --outline sticker_extremities   A/B a style option
     sheet approve  cat body_biped_front 1234    make candidate seed 1234 the canonical view
+    sheet review   cat body_sit_front           contact sheet of that view's candidates, in the gallery
     sheet export-ui                             put cat_model_sheet in both nodes' Workflows menu
 
 Direction comes from character.toml (edit the view's prompt to re-direct it), plus per-run
 --note (extra words) and --sketch (your drawing, passed as an extra reference image). Candidates
-land in ComfyUI's output/ (browse them at https://urania.cgk.sh/outputs/) and are copied to the
-package's candidates/ (gitignored). Every candidate's full recipe is appended to runs.jsonl, and
+land in ComfyUI's output/ and are copied to the package's candidates/ (gitignored); each run also
+publishes a labelled contact sheet to https://urania.cgk.sh/outputs/<character>/review/.
+Every candidate's full recipe is appended to runs.jsonl, and
 ComfyUI embeds the graph in each PNG, so any take can be regenerated exactly.
 """
 import argparse
@@ -30,7 +32,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from pipeline import graphs  # noqa: E402
-from pipeline.comfy import Comfy, inventory, to_ui  # noqa: E402
+from pipeline.comfy import Comfy, inventory, publish, to_ui  # noqa: E402
 
 CHARS = REPO / "projects/cat/characters"
 
@@ -134,6 +136,28 @@ class Blocked(Exception):
     pass
 
 
+def review_sheet(pkg, view, variant, seeds, tag=""):
+    """Label the given candidates by seed (the approved image first, if any), tile them 4 across and
+    publish the result to <character>/review/ in the studio gallery. Returns its URL."""
+    cdir = pkg.dir / "candidates" / variant / view
+    tiles = [(f"{s}", cdir / f"{s}.png") for s in seeds if (cdir / f"{s}.png").exists()]
+    ap = pkg.approved(view, variant)
+    if ap and ap.exists():
+        tiles.insert(0, ("approved", ap))
+    if not tiles:
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out = pkg.dir / "candidates" / "_review" / f"{view}@{variant}{'_' + tag if tag else ''}_{stamp}.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    args = []
+    for label, path in tiles:
+        args += ["-label", label, str(path)]
+    font = "/System/Library/Fonts/Supplemental/Arial.ttf"   # montage has no usable default font on macOS
+    subprocess.run(["magick", "montage", "-font", font, "-pointsize", "22", *args, "-resize", "400x400",
+                    "-tile", f"{min(len(tiles), 4)}x", "-geometry", "+8+8", str(out)], check=True)
+    return publish([out], f"{pkg.id}/review") + out.name
+
+
 def parse_target(s, pkg):
     view, _, variant = s.partition("@")
     variant = variant or pkg.base
@@ -181,6 +205,7 @@ def cmd_run(a):
         print("nothing runnable — approve something, or see `sheet status`")
         return
     runs = pkg.dir / "runs.jsonl"
+    made = {}   # (view, variant) -> seeds from this run, for the review sheets
     with Comfy(a.node) as c:
         have = set(c.choices("UNETLoader", "unet_name"))
         if graphs.QWEN_EDIT["unet"] not in have:
@@ -209,6 +234,7 @@ def cmd_run(a):
                 print(f"  {view}@{variant} seed {seed} ({a.quality}, {w}x{h}) ...", end="", flush=True)
                 imgs = c.wait(c.submit(g))
                 local = c.fetch(imgs[0], pkg.dir / "candidates" / variant / view / f"{seed}.png")
+                made.setdefault((view, variant), []).append(seed)
                 dt = time.time() - t0
                 var = pkg.variants[variant]
                 want = var.get("profile_eyes") if pkg.views[view].get("angle") == "profile" else var.get("eyes")
@@ -223,7 +249,8 @@ def cmd_run(a):
                         "refs": [str(r.relative_to(pkg.dir)) if r.is_relative_to(pkg.dir) else str(r) for r in refs],
                         "models": graphs.QWEN_EDIT, "loras": pkg.views[view].get("loras", []), "output": imgs[0], "seconds": round(dt, 1), "eyes": eyes,
                     }) + "\n")
-    print(f"review: open {pkg.dir.relative_to(REPO)}/candidates   (or https://{inventory()[a.node.upper() + '_MGMT']}/outputs/)")
+    for (view, variant), seeds in made.items():
+        print(f"review: {review_sheet(pkg, view, variant, seeds, a.outline or '')}")
     print(f"then:   sheet approve {pkg.id} <view>[@variant] <seed>")
 
 
@@ -250,6 +277,19 @@ def cmd_approve(a):
                 pass
     if unblocked:
         print("runnable now: " + ", ".join(unblocked))
+
+
+def cmd_review(a):
+    """Publish a labelled contact sheet of a view's candidates to the studio gallery."""
+    pkg = Package(a.character)
+    view, variant = parse_target(a.target, pkg)
+    if a.seeds:
+        seeds = [int(x) for x in a.seeds.split(",")]
+    else:
+        files = sorted((pkg.dir / "candidates" / variant / view).glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True)
+        seeds = [int(f.stem) for f in files]
+    url = review_sheet(pkg, view, variant, seeds)
+    print(f"review: {url}" if url else f"no candidates for {view}@{variant}")
 
 
 def cmd_export_ui(a):
@@ -285,6 +325,9 @@ def main():
     r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
     ap = sub.add_parser("approve"); ap.add_argument("character"); ap.add_argument("target")
     ap.add_argument("seed", type=int); ap.set_defaults(f=cmd_approve)
+    rv = sub.add_parser("review"); rv.add_argument("character"); rv.add_argument("target")
+    rv.add_argument("--seeds", help="comma-separated; default: every candidate, newest first")
+    rv.set_defaults(f=cmd_review)
     e = sub.add_parser("export-ui"); e.set_defaults(f=cmd_export_ui)
     a = p.parse_args()
     a.f(a)

@@ -34,6 +34,18 @@ def inventory():
     return env
 
 
+def publish(files, subdir):
+    """Copy local files into urania's studio output/<subdir>/, so they show up in the /outputs/
+    gallery (studio profile, same client cert as ComfyUI). Returns the gallery URL. Everything Colby
+    reviews goes here, never to a local folder he would have to open."""
+    inv = inventory()
+    host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/studio/output/{subdir}"
+    ssh = ["-o", "BatchMode=yes", "-i", inv["SSH_KEY"]]
+    subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {dest}"], check=True)
+    subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{dest}/"], check=True)
+    return f"https://{host}/outputs/{subdir}/"
+
+
 class Comfy:
     def __init__(self, node="urania"):
         inv = inventory()

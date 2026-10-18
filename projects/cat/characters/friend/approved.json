@@ -1,0 +1,16 @@
+{
+  "_seeds": {
+    "body_quadruped_side@teen": 735325776,
+    "body_sit_front@teen": 1628271379,
+    "expr_satisfied@teen": 1705943527,
+    "expr_sly@teen": 2012087693,
+    "head_front@teen": 368105984
+  },
+  "teen": {
+    "body_quadruped_side": "sheet/teen/body_quadruped_side.png",
+    "body_sit_front": "sheet/teen/body_sit_front.png",
+    "expr_satisfied": "sheet/teen/expr_satisfied.png",
+    "expr_sly": "sheet/teen/expr_sly.png",
+    "head_front": "sheet/teen/head_front.png"
+  }
+}

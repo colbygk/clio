@@ -104,11 +104,18 @@ appears between the legs or in front of the body."""
 [[views]]
 id = "body_quadruped_side"
 group = "body"
-refs = ["source"]
+# Image 2 = the approved sitting view, as the BODY STYLE reference. Briefed with the head alone, all
+# four September candidates came back off-style: fur texture, and the three eyes shrunk into a
+# small cluster (Colby, 2026-10-18: "not the same style"). Sit candidates 2132751763 (approved) and
+# 1067259504 are his examples of the right style.
+refs = ["source", "@body_sit_front"]
 size = [1216, 832]
 prompt = """Draw the full body of the cat from image 1 walking on all four legs, body seen from \
-the side and facing right, long thin tail raised in a gentle curve. The head is turned toward the \
-viewer so the face from image 1 is fully visible."""
+the side and facing right, long thin tail raised in a gentle curve. Draw the body in exactly the \
+same style as the cat in image 2: one smooth, solid black silhouette with clean edges, no fur and \
+no texture, and thin white lines only where a leg passes in front of the body. The head is turned \
+to face the viewer and is the head from image 1 at the same size relative to the body as in \
+image 2: big, with three large white eyes, never shrunk."""
 
 [[views]]
 id = "body_sit_front"
