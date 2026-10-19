@@ -6,6 +6,7 @@
     keys run      ep01 [--shots s010,s020] [-n 2] [--note "..."]   candidates for each key frame
     keys approve  ep01 s010 0 1234        make candidate seed 1234 the canonical key 0 of s010
     keys auto     ep01                    approve the first candidate of every key not yet approved
+    keys review   ep01 [--shots …]        contact sheets of the candidates (approved ones marked *)
     keys status   ep01
 
 Each key is one image-edit pass conditioned on the approved set backdrop (image 1) and the
@@ -101,9 +102,15 @@ def key_path(ep, shot, k):
     return ep.dir / "keys" / shot["id"] / f"k{k}.png"
 
 
-def direction(ep, shot, key):
+def direction(ep, shot, key, k=0):
+    """(prompt, negative, refs) for key k of a shot. Key 0 is staged on the set; every later key is
+    staged on the shot's PREVIOUS approved key, so the pair shares scene, camera and framing and the
+    in-between animates a motion instead of morphing between two compositions."""
     cast = key.get("cast", shot.get("cast", []))
-    refs = [ep.dir / "sets" / f"{shot['set']}.png"]
+    prev = key_path(ep, shot, k - 1) if k > 0 else None
+    if prev is not None and not prev.exists():
+        raise LookupError(f"approve k{k - 1} first (later keys are staged on the previous one)")
+    refs = [prev or ep.dir / "sets" / f"{shot['set']}.png"]
     if not refs[0].exists():
         raise LookupError(f"set {shot['set']} not approved yet (keys sets / approve-set)")
     who = []
@@ -112,13 +119,21 @@ def direction(ep, shot, key):
         refs.append(img)
         name, desc = ep.describe(member)
         who.append(f"{desc}, drawn exactly like the character in image {i}")
-    parts = [f"Image 1 is the background scene. Redraw it as the backdrop of one animation frame, "
-             f"framed as {FRAMING.get(shot.get('camera', 'medium'), 'a medium shot')}, keeping its "
-             f"ink line-art style."]
+    framing = FRAMING.get(shot.get("camera", "medium"), "a medium shot")
+    if not cast:          # no character: "the face fills the frame" made the model invent a person
+        framing = framing.split(":")[0]
+    if prev:
+        parts = ["Image 1 is the previous frame of this same shot. Keep its background, camera angle, "
+                 "framing and scale exactly; show the next moment of the action."]
+    else:
+        parts = [f"Image 1 is the background scene. Redraw it as the backdrop of one animation frame, "
+                 f"framed as {framing}, keeping its ink line-art style."]
     if who:
         parts.append("In the scene: " + "; and ".join(who) + ".")
+    elif not prev:
+        parts.append("There are no characters, no animals and no people in this frame.")
     parts += [f"What is happening: {key['pose']}.", STYLE]
-    neg = NEGATIVE
+    neg = NEGATIVE + ("" if cast else ", person, face, human, animal")
     if any(ep.parse_cast(m)[1] in ("2eye", "kitten2eye") for m in cast):
         neg += ", third eye, eye on forehead"
     return " ".join(parts), neg, refs
@@ -133,13 +148,15 @@ def cmd_run(a):
                 if key_path(ep, shot, k).exists() and not a.redo:
                     continue
                 try:
-                    prompt, neg, refs = direction(ep, shot, key)
+                    prompt, neg, refs = direction(ep, shot, key, k)
                 except LookupError as e:
                     print(f"  {shot['id']} k{k}: blocked — {e}")
                     continue
                 if a.note:
                     prompt += f" {a.note}"
-                for _ in range(a.n):
+                have = len(list((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png")))
+                todo = a.n if (a.redo or a.note or a.more) else a.n - have   # resuming: only what is missing
+                for _ in range(max(0, todo)):
                     seed = random.randrange(1, 2**31)
                     t0 = time.time()
                     out, names = generate(c, ep, prompt, refs, seed, f"cat/{ep.id}/keys/{shot['id']}_k{k}_s{seed}", neg)
@@ -152,6 +169,20 @@ def cmd_run(a):
     if tiles:
         for i in range(0, len(tiles), 16):    # one sheet per 16 candidates keeps them legible
             print(f"review: {contact(ep, f'keys_{i // 16:02d}', tiles[i:i + 16])}")
+
+
+def cmd_review(a):
+    """Contact sheets of every key's candidates (approved key marked), published to the gallery."""
+    ep = Episode(a.episode)
+    tiles = []
+    for shot in ep.select(a.shots):
+        for k, _ in enumerate(shot.get("keys", [])):
+            ap = key_path(ep, shot, k)
+            for f in sorted((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png"), key=lambda f: f.stat().st_mtime):
+                mark = " *" if ap.exists() and ap.read_bytes() == f.read_bytes() else ""
+                tiles.append((f"{shot['id']} k{k} {f.stem}{mark}", f))
+    for i in range(0, len(tiles), 16):
+        print(f"review: {contact(ep, f'keys_{i // 16:02d}', tiles[i:i + 16])}")
 
 
 def approve(ep, shot, k, seed):
@@ -196,11 +227,13 @@ def main():
     s = sub.add_parser("approve-set"); s.add_argument("episode"); s.add_argument("set"); s.add_argument("seed", type=int)
     s.set_defaults(f=cmd_approve_set)
     r = sub.add_parser("run"); r.add_argument("episode"); r.add_argument("--shots"); r.add_argument("-n", type=int, default=2)
-    r.add_argument("--note"); r.add_argument("--redo", action="store_true")
+    r.add_argument("--note"); r.add_argument("--redo", action="store_true", help="also redo approved keys")
+    r.add_argument("--more", action="store_true", help="n fresh candidates for every unapproved key")
     r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
     ap = sub.add_parser("approve"); ap.add_argument("episode"); ap.add_argument("shot"); ap.add_argument("key", type=int)
     ap.add_argument("seed", type=int); ap.set_defaults(f=cmd_approve)
     au = sub.add_parser("auto"); au.add_argument("episode"); au.set_defaults(f=cmd_auto)
+    rv = sub.add_parser("review"); rv.add_argument("episode"); rv.add_argument("--shots"); rv.set_defaults(f=cmd_review)
     st = sub.add_parser("status"); st.add_argument("episode"); st.set_defaults(f=cmd_status)
     a = p.parse_args()
     a.f(a)

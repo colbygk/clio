@@ -13,6 +13,7 @@ script runs and what Colby opens by hand are one graph.
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -40,10 +41,24 @@ def publish(files, subdir):
     reviews goes here, never to a local folder he would have to open."""
     inv = inventory()
     host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/studio/output/{subdir}"
-    ssh = ["-o", "BatchMode=yes", "-i", inv["SSH_KEY"]]
+    ssh = ["-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-i", inv["SSH_KEY"]]
     subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {dest}"], check=True)
     subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{dest}/"], check=True)
     return f"https://{host}/outputs/{subdir}/"
+
+
+_awake = None
+
+
+def keep_awake():
+    """Hold off idle sleep on the Mac while this process runs. ceres sleeps after 1 minute idle,
+    which froze every long run and dropped its tunnels (2026-10-18: 13-minute stalls on 20-second
+    jobs). `caffeinate -w` releases itself when this process exits; the Mac's settings are untouched."""
+    global _awake
+    if _awake is None and shutil.which("caffeinate"):
+        # -s: no system sleep while on AC power. -i alone is not enough: away from the desk the
+        # Mac sits in screen-off "dark wake" maintenance windows, where idle-sleep assertions lapse.
+        _awake = subprocess.Popen(["caffeinate", "-i", "-s", "-w", str(os.getpid())])
 
 
 class Comfy:
@@ -58,6 +73,7 @@ class Comfy:
 
     # ---- tunnel ----
     def __enter__(self):
+        keep_awake()
         # the free-port probe can race another process for the port; a fresh port fixes it
         for attempt in range(3):
             try:
@@ -73,7 +89,11 @@ class Comfy:
         self.port = s.getsockname()[1]
         s.close()
         self.proc = subprocess.Popen(
-            ["ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-i", self.key,
+            # A dedicated connection, never ~/.ssh/config's shared ControlMaster: through a mux
+            # master, ssh hands the forward over and exits 0, and every tunnel then dies with
+            # that master (both nodes' runs reset at once on 2026-10-18).
+            ["ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+             "-o", "ControlMaster=no", "-o", "ControlPath=none", "-i", self.key,
              "-L", f"{self.port}:127.0.0.1:{self.remote_port}", f"{self.user}@{self.host}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         for _ in range(100):
@@ -145,7 +165,16 @@ class Comfy:
         """Block until the job finishes; return its output files [{filename, subfolder, type}]."""
         t0 = time.time()
         while time.time() - t0 < timeout:
-            h = self.get(f"/history/{prompt_id}")
+            try:
+                h = self.get(f"/history/{prompt_id}")
+            except OSError:
+                # The job runs on the node regardless; only our tunnel dropped (seen 2026-10-18:
+                # both nodes' runs reset at once while ComfyUI stayed up). Reconnect and keep waiting.
+                time.sleep(poll)
+                if self.proc and self.proc.poll() is None:
+                    self.proc.terminate()
+                self.__enter__()
+                continue
             if prompt_id in h:
                 entry = h[prompt_id]
                 status = entry.get("status", {})

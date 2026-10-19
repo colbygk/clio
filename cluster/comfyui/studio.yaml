@@ -22,4 +22,4 @@ services:
       # Replaces the upstream value outright (env keys override, they do not append), so it must
       # carry every flag the base file sets. --database-url moves the assets index into this
       # profile's user dir; its default is inside the shared ComfyUI checkout under run/.
-      COMFY_CMDLINE_EXTRA: --enable-assets --database-url sqlite:////basedir/user/comfyui.db --bf16-unet --bf16-vae --bf16-text-enc
+      COMFY_CMDLINE_EXTRA: --enable-assets --database-url sqlite:////basedir/user/comfyui.db --disable-pinned-memory --bf16-unet --bf16-vae --bf16-text-enc
