@@ -13,12 +13,16 @@
     "body_biped_front@3eye": 621705445,
     "body_quadruped_side@2eye": 878293764,
     "body_quadruped_side@3eye": 330622681,
+    "body_quadruped_side@kitten2eye": 1443618081,
     "body_sit_front@2eye": 370348026,
     "body_sit_front@3eye": 2057634610,
+    "body_sit_front@kitten2eye": 64696791,
     "head_front@2eye": 791150487,
     "head_front@kitten2eye": 1189329613
   },
   "kitten2eye": {
+    "body_quadruped_side": "sheet/kitten2eye/body_quadruped_side.png",
+    "body_sit_front": "sheet/kitten2eye/body_sit_front.png",
     "head_front": "sheet/kitten2eye/head_front.png"
   }
 }

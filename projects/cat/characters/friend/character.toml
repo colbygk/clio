@@ -12,6 +12,14 @@
 [character]
 id = "friend"
 name = "Friend"
+# Colby, 2026-10-22: s070 k0's Friend is the right one ("a good rendition of the friend"); every
+# later shot showing Friend's body draws from this crop of it instead of the sheet's body views.
+scene_ref = "ref/friend_s070k0.png"
+# Body plan, said in every key-frame direction (pipeline/episode.py describe). ep01 v1 drew the
+# cats standing like people, and the in-betweens then morphed upright keys into four-legged ones
+# (a six-limbed "centaur" — Colby, 2026-10-21). bin/keys check flags any key that breaks it.
+anatomy = """built like a real cat: exactly four legs and no arms, and it stands, walks, runs and \
+sits on all fours like a real cat; it never stands or walks upright on its hind legs like a person"""
 # No source drawing: head_front is designed here. Image 1 for it is Codubee's head, used only as a
 # STYLE reference (brush-pen line quality, proportions of the world), not as the cat to draw.
 
@@ -79,3 +87,26 @@ size = [1216, 832]
 prompt = """Reduce the white cat in image 1 to only its shadow: a soft-edged grey-black cast shadow \
 of the same trotting cat on plain white ground, no lines, no eyes, no cat visible — only the \
 shadow shape."""
+
+# ---- character LoRA (bin/lora) ------------------------------------------------------------------
+# See ../cat/character.toml [lora]. Friend stays deliberately unspecific, so the dataset is small
+# and the LoRA is trained weaker (it should hold the line quality, not lock a face).
+[lora]
+trigger = "frnd"
+outline = false         # line-drawn white cat: there is no solid shape to outline
+variants = ["teen"]
+caption = "{trigger}, {who}, {pose}, loose black brush-pen line drawing on plain white paper"
+poses = [
+  "walking to the right, side view",
+  "trotting to the left, side view",
+  "running at full speed, side view",
+  "leaping through the air",
+  "sitting upright facing the viewer, tail curled round the feet",
+  "sitting seen from the side",
+  "standing on all fours, looking back over its shoulder with a sly half-smile",
+  "walking away from the viewer, seen from behind, tail up",
+  "crouched low, watching something",
+  "lying on its side, relaxed",
+  "head close-up facing the viewer, a sly satisfied smile",
+  "head close-up in three-quarter view, unreadable expression",
+]

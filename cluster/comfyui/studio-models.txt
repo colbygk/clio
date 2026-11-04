@@ -31,3 +31,9 @@ loras/Wan_2_2_I2V_A14B_*_lightx2v_4step_lora_260412_rank_64_fp16.safetensors
 
 # ACE-Step 1.5 turbo, all-in-one (music): bin/sound
 checkpoints/ace_step_1.5_turbo_aio.safetensors
+
+# Qwen3.5-9B, a vision-language model: anatomy checks on every candidate (pipeline/check.py)
+text_encoders/qwen3.5_9b_bf16.safetensors
+
+# Character LoRAs trained by bin/lora: the folder itself, so a newly trained file shows up without a sync
+loras/characters

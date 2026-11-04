@@ -7,6 +7,11 @@ id = "cat"
 name = "Codubee"
 # The original drawing. It IS the approved 3-eye head_front; everything descends from it.
 source = "ref/head_front_3eye.png"
+# Body plan, said in every key-frame direction (pipeline/episode.py describe). ep01 v1 drew the
+# cats standing like people, and the in-betweens then morphed upright keys into four-legged ones
+# (a six-limbed "centaur" — Colby, 2026-10-21). bin/keys check flags any key that breaks it.
+anatomy = """built like a real cat: exactly four legs and no arms, and it stands, walks, runs and \
+sits on all fours like a real cat; it never stands or walks upright on its hind legs like a person"""
 
 [style]
 # Appended to every direction. Describes the look, not the pose.
@@ -76,6 +81,8 @@ relative to the body, larger eyes, shorter and softer legs, a short body, small 
 shorter tail. Same flat solid black shapes, same two white eyes with slit pupils, same white \
 triangular nose, same whiskers, same pose and the same framing. Exactly two eyes."""
 negative = "third eye, three eyes, eye on forehead, adult cat, long legs"
+
+# No kitten3eye variant: kittens never have a third eye (Colby, 2026-10-21). It opens on the teen.
 
 # ---- views -------------------------------------------------------------------------------------
 # refs: "source" = the original drawing; "@<view>" = the approved image of that view (same
@@ -198,3 +205,36 @@ size = [1024, 1024]
 prompt = """The cat in image 1 is talking: add a simple open mouth just below the nose, drawn as \
 a white shape inside the black head, in the same graphic style as the eyes. Same head, same \
 framing."""
+
+# ---- character LoRA (bin/lora) ------------------------------------------------------------------
+# A small add-on trained on approved images of Codubee, so every key frame draws the same cat
+# instead of re-deriving it from three reference pictures each time. bin/lora dataset draws each
+# pose below for each variant on plain white (from that variant's approved sheet art), the
+# reviewer picks the good ones, and bin/lora train fits the LoRA on exactly those.
+[lora]
+trigger = "codubee"
+outline = true          # dataset images get the ruled sticker outline (pipeline/ink.py)
+variants = ["2eye", "3eye", "kitten2eye"]
+caption = "{trigger}, {who}, {pose}, flat solid black brush-pen ink drawing on plain white paper"
+poses = [
+  "walking to the right, side view",
+  "trotting to the left, side view, tail up",
+  "running at full speed, side view, legs stretched out",
+  "leaping through the air, front legs reaching forward",
+  "crouched low, ready to pounce, rear end raised, tail twitching",
+  "sitting upright facing the viewer, front paws together, tail curled round the feet",
+  "sitting seen from the side, looking up",
+  "sitting in three-quarter view, one front paw raised to bat at something",
+  "curled up asleep, tail over the nose",
+  "lying on its side, relaxed",
+  "lying on its back, paws in the air, playful",
+  "stretching: front legs flat out, rear end up",
+  "standing on all fours, looking back over its shoulder",
+  "walking towards the viewer, front view",
+  "walking away from the viewer, seen from behind, tail up",
+  "jumping down, front legs reaching for the ground",
+  "licking one front paw, sitting",
+  "head and shoulders close-up, three-quarter view, curious",
+  "head close-up facing the viewer, eyes wide, surprised",
+  "head close-up facing the viewer, sad, ears flattened",
+]

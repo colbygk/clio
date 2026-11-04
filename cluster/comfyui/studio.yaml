@@ -10,6 +10,11 @@
 # before children, so these land on top of the upstream ./basedir:/basedir mount.
 services:
   comfyui-nvidia:
+    # Only clio-comfyui.service starts this container. Upstream's `restart: unless-stopped` let
+    # dockerd bring it back at boot on its own (2026-10-23): before clio's NFS model store was
+    # mounted (it saw an empty /store/models) and alongside vLLM on both nodes, which the unit's
+    # Conflicts= exists to prevent.
+    restart: "no"
     volumes:
       - ./studio/input:/basedir/input       # NFS-shared from urania, like basedir/input
       - ./studio/output:/basedir/output
@@ -22,4 +27,7 @@ services:
       # Replaces the upstream value outright (env keys override, they do not append), so it must
       # carry every flag the base file sets. --database-url moves the assets index into this
       # profile's user dir; its default is inside the shared ComfyUI checkout under run/.
+      # --disable-pinned-memory: on the GB10's unified memory, pinned host staging faults with "CUDA
+      # error: operation not permitted" when model families switch in one process (2026-10-18).
+      # NOT --disable-dynamic-vram: tried 2026-10-21, it breaks Qwen3.5 (weights left on the CPU).
       COMFY_CMDLINE_EXTRA: --enable-assets --database-url sqlite:////basedir/user/comfyui.db --disable-pinned-memory --bf16-unet --bf16-vae --bf16-text-enc

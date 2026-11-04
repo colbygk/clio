@@ -7,6 +7,11 @@
 # workflow tabs and other per-site browser state never carry across into the studio.
 services:
   comfyui-nvidia:
+    # Only clio-comfyui.service starts this container. Upstream's `restart: unless-stopped` let
+    # dockerd bring it back at boot on its own (2026-10-23): before clio's NFS model store was
+    # mounted (it saw an empty /store/models) and alongside vLLM on both nodes, which the unit's
+    # Conflicts= exists to prevent.
+    restart: "no"
     ports: !override
       - 127.0.0.1:8189:8188
     environment:

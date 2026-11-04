@@ -166,6 +166,39 @@ Writes a `.sb3` (zip of `project.json` + assets) directly, importable at scratch
   as notes → Music-extension `set instrument` / `play note for beats` blocks.
 - Respects Scratch's limits (per-asset size, project.json size) so it uploads cleanly.
 
+### Two speeds: animatic, then render (decided 2026-10-21)
+The loop is ideate → create → reflect → feed back into the outline. An unsupervised run with a
+loose outline is a legitimate way to find the story, as long as it is cheap:
+
+- **Animatic** (`keys run` → `keys auto` → `cut --animatic`, minutes): key frames held on screen
+  with temp voice and timing. Watch it, give notes, change `script.fountain` / `shots.toml`,
+  run it again. No in-betweens.
+- **Render** (`tween run` → foley → `cut`, hours): only once the animatic is right.
+
+### Character consistency (from ep01 v1, 2026-10-21)
+v1 drifted: Codubee sometimes outlined and sometimes not, cats standing like people, and in-betweens
+morphing an upright key into a four-legged one (a six-limbed "centaur"). The fixes are rules:
+- **The outline is drawn, never asked for.** `pipeline/ink.py` finds Codubee's solid-black
+  silhouette by morphology and draws the white band + dark edge at a fixed width per framing, on
+  approved keys and on every frame of every clip. `outline = false` on a shot turns it off.
+- **Bodies come from the model sheet.** A later key uses the previous key only for staging (scene,
+  camera, positions); every character is drawn from its sheet art, so drift can't compound.
+- **Anatomy is stated and checked.** Each character.toml has an `anatomy` rule said in every
+  direction (four legs, never upright), and `pipeline/check.py` asks a local vision model
+  (Qwen3.5-9B through ComfyUI's `TextGenerate`) about each candidate's posture, limbs and eyes.
+- **A LoRA per character** (`bin/lora`, ComfyUI's native trainer): a pose library drawn from the
+  sheet, picked by Colby, trained into the model store; `[lora] use = …` turns it on for keys.
+
+### Audio: a separate pass, ordered against the picture (decided 2026-10-21)
+Joint audio+video generation gives sync but no control over whose voice it is, no stems to mix,
+and every re-render changes the sound. So audio stays separate, tied to the stage it belongs to:
+| Audio | When | Why |
+|---|---|---|
+| Voice | before key frames | recorded/cloned lines set shot timing, as in studio animation |
+| Foley | after in-betweens, per shot | a video-to-audio model watches the clip, so sync comes from the frames |
+| Music | temp in animatics, final after picture lock | scored to the locked cut |
+The ep01 v1 stand-ins (macOS `say`, synthesized noise) are placeholders for timing only.
+
 ### Build order
 1. Script for the first scene (write/draft together) → `shots.toml` format.
 2. `bin/keys` for that scene's key frames.

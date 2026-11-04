@@ -9,13 +9,16 @@
 #   camera     wide | medium | close | extreme_close, plus optional move: "pan_right", "push_in", "shake"
 #   cast       characters in frame: "<character>:<variant>" — character packages in ../../characters/
 #   keys       key frames, in order. `at` is seconds into the shot; `pose` is what bin/keys directs;
-#              an optional per-key `cast` overrides the shot's (s160: the variant changes mid-shot).
+#              an optional per-key `cast` overrides the shot's (s120: the variant changes mid-shot), and
+#              an optional `avoid` adds to the negative prompt (what Colby saw and did not want).
 #              Two keys = one in-between (bin/tween runs first->last frame between each pair).
 #   action     the motion between keys, in words — what the in-between is directed with
 #   lines      dialogue: who, text, `at` (seconds into the shot), how (delivery note)
 #   sfx        sound cues: what, `at`; foley is generated to match, or Scratch plays it at that time
 #   music      cue name from [music.*], starting at this shot
 #   transition how this shot leaves: cut (default) | match_dissolve | fade_out
+#   outline    false turns off the drawn sticker outline (pipeline/ink.py) for a shot where a solid
+#              black thing that is not Codubee (the dog's shadow) would get one too
 
 [meta]
 title = "The Third Eye (test scene)"
@@ -26,8 +29,10 @@ scratch_stage = [480, 360]   # Scratch's fixed stage; frames are letterboxed int
 # ---- characters this episode needs ------------------------------------------------------------
 # The variant names here must exist in each package's character.toml.
 #   cat:kitten2eye   young Codubee, two eyes (NEW variant — bigger head, shorter legs)
-#   cat:2eye         teen Codubee before the change (exists: head only so far)
-#   cat:3eye         teen Codubee after (exists: head + standing front)
+#   cat:2eye         teen Codubee, years later (s160 only, as the memory lands)
+#   cat:3eye         teen Codubee once the third eye opens (s160-s170)
+#   Colby, 2026-10-21: the betrayal happens to the KITTEN; kittens never have a third eye, so the
+#   ending cuts forward to the teen and the eye opens there.
 #   friend:teen      NEW character package — not designed yet
 #   dog              never drawn as a character: a cast shadow only (a set element)
 
@@ -39,6 +44,18 @@ describe = "narrow alley at dusk between wooden board fences, fallen leaves; a g
 [sets.yard_dusk]
 describe = "small yard on the far side of the fence at dusk"   # the rain is directed in s170, not the set
 
+# ---- designs to hold to: drawings Colby picked from this episode (2026-10-29) ----------------
+# Keys draw these characters from these crops instead of the package sheets (Episode.ref_for).
+[refs]
+"friend:teen" = "refs/friend_s040k1.png"   # "Friend doesn't match up design wise with s040 k1"
+"cat:2eye" = "refs/teen_s120k0.png"        # the teen kept getting skinnier; hold to s120 k0's round head
+"cat:3eye" = "refs/teen_s120k0.png"
+
+# Props: drawn things that are not characters, listed per shot or key as props = [...]
+[props.dog]
+ref = "refs/dog_s080k1.png"                 # "a great dangerous looking dog ... the design guide"
+describe = "the big, shaggy, dangerous-looking dog drawn in scratchy black ink hatching, with a long muzzle and bared teeth"
+
 [music.play]
 describe = "light, curious, plucked — kitten play"
 [music.dread]
@@ -48,21 +65,28 @@ describe = "nothing: the chase music cuts out"
 [music.after]
 describe = "a single sustained tone, almost silence; one soft melodic phrase as the tear falls"
 
+# Rewritten 2026-10-22 from Colby's key-frame notes (review page): the dog breaks through the
+# fence, Friend escapes by springing off Codubee, Codubee barely gets away, and later Friend is
+# unbothered. Codubee is on the LEFT and Friend on the RIGHT in every two-shot, as in s070 k0.
+# Revised 2026-10-29 from his notes on that round: the fence-top cats looked like they were floating,
+# and s070 k0 (both running on the alley floor) is "a better place to end up instead of having them
+# on the fences", so s040-s060 are on the ground too.
+
 # ================================================================== EXT. BACK GARDEN - MORNING
 [[shots]]
 id = "s010"
 set = "garden_morning"
-seconds = 5
+seconds = 6
 camera = "wide"
 cast = ["cat:kitten2eye"]
 music = "play"
 keys = [
   { at = 0.0, pose = "crouched in tall grass, rear up, tail twitching, watching a moth above" },
   { at = 2.0, pose = "mid-air pounce, all four paws reaching for the moth" },
-  { at = 5.0, pose = "on its back in the grass after tumbling, paws up, delighted" },
+  { at = 6.0, pose = "after a tumble, the kitten rolls up and bats at a dandelion clock with one front paw; the same grass and dandelions as before; the kitten is the only animal in the frame, with nothing under it but grass", avoid = "second cat, extra creature, cat-shaped shadow, blob under the kitten" },
 ]
-action = "the kitten pounces at the moth, misses, tumbles over in the grass and springs back up"
-sfx = [{ what = "moth wings flutter", at = 0.5 }, { what = "soft thump and grass rustle", at = 3.0 }]
+action = "the kitten pounces at the moth, misses, tumbles in the grass and comes up batting at a dandelion"
+sfx = [{ what = "moth wings flutter", at = 0.5 }, { what = "soft thump and grass rustle", at = 3.5 }]
 
 [[shots]]
 id = "s020"
@@ -71,25 +95,25 @@ seconds = 5
 camera = "medium"
 cast = ["cat:kitten2eye"]
 keys = [
-  { at = 0.0, pose = "sitting up, batting a dandelion clock with one paw" },
-  { at = 3.0, pose = "the dandelion bursts into a cloud of seeds around the kitten's face, eyes wide with joy" },
+  { at = 0.0, pose = "sitting up with a dandelion clock held close to its face" },
+  { at = 3.0, pose = "the kitten blowing gently on the dandelion clock held up in front of its face: cheeks puffed out slightly, mouth a small round pucker; a few curved motion lines from its mouth to the dandelion head, and the seeds lifting off the TOP of the dandelion head and drifting away above it, trailing little motion lines", avoid = "wide open mouth, open-mouthed, smiling, seeds below the dandelion, seeds still on the stem" },
 ]
-action = "the kitten bats the dandelion until it bursts into seeds"
+action = "the kitten blows on the dandelion and the seeds fly away on the wind"
 lines = [{ who = "cat", text = "Again!", at = 3.5, how = "giggling, tiny voice" }]
-sfx = [{ what = "soft puff of seeds", at = 3.0 }]
+sfx = [{ what = "a little puff of breath", at = 2.5 }, { what = "soft puff of seeds", at = 3.0 }]
 
 [[shots]]
 id = "s030"
 set = "garden_morning"
-seconds = 3
-camera = "close"
+seconds = 4
+camera = "wide"
 move = "tilt_up"
-cast = []
+cast = ["cat:kitten2eye"]
 keys = [
-  { at = 0.0, pose = "dandelion seeds drifting upward against the sky" },
-  { at = 3.0, pose = "the seeds have become falling leaves against a dusk sky" },
+  { at = 0.0, pose = "the kitten small in the foreground, sitting and watching dandelion seeds drift upward, plain white sky" },
+  { at = 4.0, pose = "the kitten watching the last seeds drift away over the garden fence, plain white sky" },
 ]
-action = "seeds drift upward and turn into falling leaves as the light goes from morning to dusk"
+action = "the kitten watches the seeds drift away over the fence"
 transition = "match_dissolve"
 
 # ================================================================== EXT. ALLEY - DUSK
@@ -99,35 +123,35 @@ set = "alley_dusk"
 seconds = 5
 camera = "wide"
 move = "pan_right"
-cast = ["cat:2eye", "friend:teen"]
+cast = ["cat:kitten2eye", "friend:teen"]
 music = "dread"
 keys = [
-  { at = 0.0, pose = "two lanky teen cats trotting side by side along the top of a board fence, facing right" },
-  { at = 5.0, pose = "same, shoulders bumping playfully" },
+  { at = 0.0, pose = "both cats trotting along the gravel floor of the alley, facing right, every paw planted on the ground with a small ink shadow under each cat: the small kitten Codubee on the left, Friend, a bigger older white cat, on the right; Friend's tail held up, clear of Codubee", avoid = "floating, cats in mid-air, cats on top of the fence, no ground under the paws" },
+  { at = 5.0, pose = "same, on the alley floor: the kitten bumping into Friend, Codubee leaning his side and shoulder into Friend's front leg, and Friend nudged a little sideways off its step; paws on the ground", avoid = "gap between the cats, floating, cats in mid-air, cats on top of the fence" },
 ]
-action = "they trot along the fence top and bump shoulders, relaxed and close"
+action = "they trot down the alley; the kitten bumps playfully against Friend, relaxed and close"
 
 [[shots]]
 id = "s050"
 set = "alley_dusk"
 seconds = 3
 camera = "medium"
-cast = ["friend:teen", "cat:2eye"]
-keys = [{ at = 0.0, pose = "Friend turns its head to Codubee with a sly grin" }]
+cast = ["cat:kitten2eye", "friend:teen"]
+keys = [{ at = 0.0, pose = "standing on the alley floor: the black kitten Codubee on the left and Friend, a WHITE cat drawn only in outline, on the right; Friend turns its head to Codubee with a sly grin; exactly two cats, only one of them black", avoid = "two black cats, three cats, floating, cats on top of the fence" }]
 lines = [{ who = "friend", text = "Race you to the yard.", at = 0.5, how = "teasing" }]
 
 [[shots]]
 id = "s060"
 set = "alley_dusk"
-seconds = 3
+seconds = 4
 camera = "wide"
-cast = ["cat:2eye", "friend:teen"]
+cast = ["cat:kitten2eye", "friend:teen"]
 keys = [
-  { at = 0.0, pose = "both cats freeze on the fence, ears up" },
-  { at = 3.0, pose = "a huge dog's shadow slides across the fence boards below them" },
+  { at = 0.0, pose = "both cats skidding to a sudden stop on the alley floor: all four paws planted, legs slightly splayed out, bodies low, ears up, a little dust kicked up behind their paws; Codubee on the left, Friend on the right", avoid = "floating, cats in mid-air, cats on top of the fence, walking" },
+  { at = 4.0, props = ["dog"], pose = "the dog's head and front paws pushing out from the gap under the bottom of the fence right beside the two cats as they pass it, low and sneaking, about to spring at them", avoid = "dog on top of the fence, dog standing in the alley, dog far away" },
 ]
-action = "a dog's shadow slides along the boards; the cats stiffen"
-sfx = [{ what = "low growl", at = 0.0 }, { what = "barking", at = 1.5 }]
+action = "the cats freeze; a dog creeps out of an opening in the fence below, stalking them"
+sfx = [{ what = "low growl", at = 2.0 }]
 
 [[shots]]
 id = "s070"
@@ -135,139 +159,103 @@ set = "alley_dusk"
 seconds = 4
 camera = "wide"
 move = "pan_right"
-cast = ["cat:2eye", "friend:teen"]
+cast = ["cat:kitten2eye", "friend:teen"]
 keys = [
-  { at = 0.0, pose = "both cats leaping down from the fence into the alley, running right" },
-  { at = 4.0, pose = "both cats sprinting low along the alley, the dog's shadow looming larger behind them" },
+  { at = 0.0, pose = "both cats running right down the alley" },
+  { at = 4.0, props = ["dog"], pose = "the dog, large and clearly visible in the frame, squeezing out from the gap under the fence behind the two running cats, snarling; only the two cats and the dog", avoid = "dog hidden, dog too small to see" },
 ]
-action = "they bolt down the alley; the shadow behind them grows"
-sfx = [{ what = "paws scrabbling on gravel", at = 0.5 }, { what = "barking, closer", at = 1.0 }]
+action = "they bolt down the alley; the dog bursts through the fence after them"
+sfx = [{ what = "paws scrabbling on gravel", at = 0.5 }, { what = "barking, closer", at = 1.5 }]
 
 [[shots]]
 id = "s080"
 set = "alley_dusk"
-seconds = 3
+seconds = 4
 camera = "medium"
-cast = ["cat:2eye", "friend:teen"]
+move = "shake"
+cast = ["cat:kitten2eye", "friend:teen"]
 keys = [
-  { at = 0.0, pose = "a small gap under a fence ahead; Codubee arrives first" },
-  { at = 3.0, pose = "Codubee turns back at the gap, making room for Friend to go first" },
+  { at = 0.0, props = ["dog"], pose = "Friend launching itself off Codubee's back to get away: Friend in the air above Codubee, its hind legs pushing down hard on Codubee's back, and Codubee shoved sideways, stumbling, legs buckling; behind them the dog has just come through the gap under the fence into the alley", avoid = "Friend sitting on Codubee, Friend lying on top of Codubee, Friend leaping beside Codubee, missing iris, blank eye" },
+  { at = 4.0, cast = ["cat:kitten2eye"], props = ["dog"], pose = "Friend gone from the frame; the dog's open jaws inches from Codubee, who scrambles on the ground to get away; both of Codubee's eyes open with round pupils", avoid = "second cat, Friend, missing iris, blank eye" },
 ]
-action = "Codubee reaches the gap first and turns to let Friend through"
+action = "Friend uses Codubee as a springboard and escapes; the kitten, pushed down, can't run fast enough and the dog is on him"
+sfx = [{ what = "thud of a body hitting the ground", at = 0.5 }, { what = "snarl, very close", at = 2.0 }]
 
 [[shots]]
 id = "s090"
 set = "alley_dusk"
-seconds = 2.5
+seconds = 4
 camera = "medium"
-cast = ["friend:teen", "cat:2eye"]
+cast = ["cat:kitten2eye"]
+music = "silence"     # the dread pulse stops dead as he slips away
 keys = [
-  { at = 0.0, pose = "Friend shoulders Codubee hard aside" },
-  { at = 2.5, pose = "Friend's tail vanishing under the fence; Codubee sprawled beside the gap" },
+  { at = 0.0, props = ["dog"], pose = "Codubee wriggling free of the dog and darting away to the LEFT, facing left, towards a narrow gap between two boards of the fence on the left side of the alley; the dog behind him on the right; Codubee is the only black animal in the frame", avoid = "two black cats, second black cat, Codubee facing right, Codubee running towards the dog" },
+  { at = 4.0, props = ["dog"], pose = "Codubee squeezing his body through the narrow gap between two fence boards on the left, half way through: only his back half and tail still on this side of the fence; the dog behind on the right, too big to follow", avoid = "two black cats, second black cat, Codubee in the open, Codubee under the fence" },
 ]
-action = "Friend shoves Codubee aside and slips under the fence alone"
-music = "silence"     # the dread pulse stops dead on the shove
-sfx = [{ what = "thud of a body hitting boards", at = 0.5 }]
+action = "Codubee wriggles free and squeezes under the fence, barely"
+sfx = [{ what = "claws on wood", at = 1.0 }, { what = "barking, muffled behind the fence, fading", at = 3.0 }]
 
+# ================================================================== EXT. YARD - LATER
 [[shots]]
 id = "s100"
-set = "alley_dusk"
-seconds = 3.5
-camera = "medium"
-move = "shake"
-cast = ["cat:2eye"]
+set = "yard_dusk"
+seconds = 5
+camera = "wide"
+cast = ["cat:kitten2eye", "friend:teen"]
+music = "after"
 keys = [
-  { at = 0.0, pose = "Codubee skidding, looking back in terror" },
-  { at = 3.5, pose = "Codubee clawing over the top of the fence" },
+  { at = 0.0, pose = "a little later in the yard: Codubee, ruffled, his fur sticking out in messy tufts, walking up to Friend, who sits licking a front paw, completely unbothered, with a smug smirk: one corner of its mouth curled up, eyes half-closed and lazy; Friend has exactly four legs", avoid = "big smile, open grin, happy face, extra legs, five legs, six legs" },
+  { at = 5.0, pose = "Friend's head turned away, glancing sideways out of the corner of its half-lidded eyes at Codubee with a smug, one-sided smirk; Codubee ruffled, stopped still, looking at Friend; Friend has exactly four legs", avoid = "wink, winking, one eye closed, big smile, facing Codubee, extra legs, five legs, six legs" },
 ]
-action = "Codubee scrambles up the fence boards and over the top, barely"
-sfx = [{ what = "fence boards rattling", at = 0.5 }, { what = "snarl, very close", at = 1.0 }, { what = "claws on wood", at = 1.5 }]
+action = "the kitten finds Friend again; Friend couldn't care less about what just happened"
+sfx = [{ what = "a few soft licks", at = 1.0 }]
 
-# ================================================================== EXT. YARD - CONTINUOUS
 [[shots]]
 id = "s110"
 set = "yard_dusk"
-seconds = 3
-camera = "medium"
-cast = ["cat:2eye"]
-music = "after"
+seconds = 4
+camera = "close"
+move = "push_in"
+cast = ["cat:kitten2eye"]
 keys = [
-  { at = 0.0, pose = "Codubee dropping down from the fence" },
-  { at = 3.0, pose = "Codubee crouched on the ground, panting, safe" },
+  { at = 0.0, pose = "Codubee's face, two eyes, looking at Friend off screen" },
+  { at = 4.0, pose = "Codubee frowning as he realises Friend put its own safety before his: eyes narrowed, mouth turned down; no eyebrows", avoid = "eyebrows, brows" },
 ]
-action = "Codubee drops to the ground and pants"
-sfx = [{ what = "soft landing", at = 0.6 }, { what = "panting", at = 1.0 }, { what = "barking, muffled behind the fence, fading", at = 1.5 }]
+action = "understanding dawns: this friend was never looking out for him"
+transition = "match_dissolve"   # the kitten's face dissolves into the teen's: years pass in one cut
+sfx = [{ what = "breathing", at = 0.0 }]
 
+# ================================================================== YEARS LATER
 [[shots]]
 id = "s120"
 set = "yard_dusk"
 seconds = 4
-camera = "medium"
-cast = ["friend:teen"]
-keys = [
-  { at = 0.0, pose = "Friend sitting a few feet away, licking a paw, unhurried" },
-  { at = 4.0, pose = "Friend glancing sideways at Codubee with a small satisfied look" },
-]
-action = "Friend licks a paw, then glances over with a small satisfied look"
-sfx = [{ what = "a few soft licks", at = 0.3 }]
-
-[[shots]]
-id = "s130"
-set = "yard_dusk"
-seconds = 3
-camera = "wide"
-cast = ["friend:teen", "cat:2eye"]
-keys = [
-  { at = 0.0, pose = "Friend standing and turning away" },
-  { at = 3.0, pose = "Friend walking off out of frame; Codubee small in the foreground, watching" },
-]
-action = "Friend walks off without a word"
-
-[[shots]]
-id = "s140"
-set = "yard_dusk"
-seconds = 3
-camera = "medium"
-cast = ["cat:2eye"]
-keys = [{ at = 0.0, pose = "Codubee alone, watching the empty yard, breathing" }]
-sfx = [{ what = "breathing", at = 0.0 }]
-
-[[shots]]
-id = "s150"
-set = "yard_dusk"
-seconds = 3
 camera = "close"
-move = "push_in"
-cast = ["cat:2eye"]
-keys = [
-  { at = 0.0, pose = "Codubee's face, two eyes, numb" },
-  { at = 3.0, pose = "Codubee's two eyes widening slightly with understanding" },
-]
-action = "understanding dawns in Codubee's two eyes"
-
-[[shots]]
-id = "s160"
-set = "yard_dusk"
-seconds = 4
-camera = "close"
+# Colby, 2026-10-21: kittens never have a third eye. The lesson lands years later: teen Codubee,
+# same framing as s110, and the eye opens on the teen.
+# Colby, 2026-10-29: the teen came out skinny and angular, nothing like the kitten; and the eye
+# "just seems to emerge into existence" when it "should just open like a regular eye lid", with
+# frames in between. So: keep the kitten's build, and four keys from closed lid to open eye.
 cast = ["cat:2eye", "cat:3eye"]   # the hero moment: the variant changes during the shot
 keys = [
-  { at = 0.0, cast = ["cat:2eye"], pose = "Codubee's face, two eyes; a thin seam of light appears on the forehead" },
-  { at = 4.0, cast = ["cat:3eye"], pose = "the third eye fully open on the forehead for the first time, all three eyes wide" },
+  { at = 0.0, cast = ["cat:2eye"], pose = "the teenage Codubee's face, two eyes, the same look of understanding, tears starting to well up along the bottom of both eyes, drawn as clear white droplets; the same round, full head and soft proportions as in image 2", avoid = "skinny, angular, thin face, long snout, black drips" },
+  { at = 1.5, cast = ["cat:3eye"], pose = "the third eye still closed: a smooth closed eyelid in the middle of the forehead, drawn as one clean curved line; tears welling in his two lower eyes; the same round, full head and soft proportions as in image 2", avoid = "open third eye, sun, rays, lashes, notch, skinny, angular, thin face" },
+  { at = 2.5, cast = ["cat:3eye"], pose = "the third eye halfway open in the middle of the forehead: its lid a smooth curve covering the top half of a round eye, the bottom half of the pupil showing; tears in his two lower eyes; the same round, full head and soft proportions as in image 2", avoid = "skinny, angular, thin face, narrow head, deformed eye" },
+  { at = 4.0, cast = ["cat:3eye"], pose = "the third eye fully open in the middle of the forehead, round and the same shape as the lower eyes, its lid raised like a normal eyelid, all three eyes wide; the same round, full head and soft proportions as in image 2", avoid = "skinny, angular, thin face, narrow head, deformed eye" },
 ]
-action = "a seam of light on the forehead opens into a third eye"
+action = "the third eye's lid opens slowly on the forehead, like a waking eye"
 sfx = [{ what = "a soft, low shimmer", at = 0.5 }]
 
 [[shots]]
-id = "s170"
+id = "s130"
 set = "yard_dusk"
 seconds = 5
 camera = "extreme_close"
 cast = ["cat:3eye"]
 keys = [
-  { at = 0.0, pose = "the third eye welling up with a tear; the two lower eyes dry" },
-  { at = 3.0, pose = "a single tear running down from the third eye; first raindrops falling" },
+  { at = 0.0, pose = "the third eye welling up with a tear, a clear water drop drawn white with a thin outline; the two lower eyes dry, plain and open, with no eyelids drawn on them; the same round, full head and soft proportions as in image 2", avoid = "eyelids on the lower eyes, heavy lids, blood, black drips, dark liquid, skinny, thin face" },
+  { at = 3.0, pose = "a single clear tear, drawn white with a thin outline, running down from the third eye only; a few thin raindrop lines falling across the face; a gentle, sad, wistful expression with soft round eyes; the head whole and intact, the same round, full head and soft proportions as in image 2", avoid = "angry, evil, menacing, glaring, slanted eyes, furrowed brow, sharp teeth, blood, black drips, mangled head, broken outline, skinny, thin face" },
 ]
 action = "a single tear runs from the third eye only; rain begins"
-sfx = [{ what = "first raindrops", at = 2.5 }, { what = "rain building", at = 3.5 }]
 transition = "fade_out"
+sfx = [{ what = "first raindrops", at = 2.5 }, { what = "rain building", at = 3.5 }]

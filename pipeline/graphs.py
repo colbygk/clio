@@ -191,3 +191,35 @@ def ace_music(tags, seconds, seed, prefix, bpm=90, keyscale="A minor", timesigna
     audio = add("decode", "VAEDecodeAudio", samples=samples, vae=vae)
     add("save", "SaveAudio", audio=audio, filename_prefix=prefix)
     return g, t
+
+
+# ---- character LoRA training (bin/lora), ComfyUI's own trainer ----
+def qwen_train_lora(folder, prefix, steps=1500, rank=16, learning_rate=1e-4, size=768, seed=0, offloading=True):
+    """Train a LoRA for Qwen-Image-Edit on input/<folder>/ (image + same-named .txt caption pairs).
+    Trains on top of the fp8 weights the key frames use (quantized_backward), without the
+    Lightning LoRA, at the same ModelSamplingAuraFlow shift. Saves output/<prefix>_<steps>_steps
+    .safetensors and a loss graph. 1024 px without offloading took all of clio's unified memory and
+    hung the box (2026-10-22), hence 768 px and offloading by default."""
+    g, t = {}, {}
+
+    def add(nid, cls, title=None, **inputs):
+        g[nid] = {"class_type": cls, "inputs": inputs}
+        if title:
+            t[nid] = title
+        return [nid, 0]
+
+    model = add("unet", "UNETLoader", unet_name=QWEN_EDIT["unet"], weight_dtype="default")
+    model = add("shift", "ModelSamplingAuraFlow", model=model, shift=3.1)
+    clip = add("clip", "CLIPLoader", clip_name=QWEN_EDIT["clip"], type="qwen_image", device="default")
+    vae = add("vae", "VAELoader", vae_name=QWEN_EDIT["vae"])
+    add("data", "LoadImageTextDataSetFromFolder", "Dataset (input/" + folder + ")", folder=folder)
+    imgs = add("resize", "ResizeImagesByLongerEdge", images=["data", 0], longer_edge=size)
+    add("encode", "MakeTrainingDataset", images=imgs, vae=vae, clip=clip, texts=["data", 1])
+    add("train", "TrainLoraNode", "Train LoRA", model=model, latents=["encode", 0], positive=["encode", 1],
+        batch_size=1, grad_accumulation_steps=1, steps=steps, learning_rate=learning_rate, rank=rank,
+        optimizer="AdamW", loss_function="MSE", seed=seed, training_dtype="bf16", lora_dtype="bf16",
+        quantized_backward=True, algorithm="LoRA", gradient_checkpointing=True, checkpoint_depth=1,
+        offloading=offloading, existing_lora="[None]", bucket_mode=False, bypass_mode=False)
+    add("save", "SaveLoRA", lora=["train", 0], prefix=prefix, steps=["train", 2])
+    add("loss", "LossGraphNode", loss=["train", 1], filename_prefix=prefix + "_loss")
+    return g, t

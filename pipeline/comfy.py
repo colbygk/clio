@@ -35,16 +35,21 @@ def inventory():
     return env
 
 
+def push(files, path, host=None):
+    """Copy local files into a directory on a node (urania by default), creating it."""
+    inv = inventory()
+    host = host or inv["URANIA_MGMT"]
+    ssh = ["-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-i", inv["SSH_KEY"]]
+    subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {path}"], check=True)
+    subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{path}/"], check=True)
+
+
 def publish(files, subdir):
     """Copy local files into urania's studio output/<subdir>/, so they show up in the /outputs/
     gallery (studio profile, same client cert as ComfyUI). Returns the gallery URL. Everything Colby
     reviews goes here, never to a local folder he would have to open."""
-    inv = inventory()
-    host, dest = inv["URANIA_MGMT"], f"/opt/clio/comfyui-docker/studio/output/{subdir}"
-    ssh = ["-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-i", inv["SSH_KEY"]]
-    subprocess.run(["ssh", *ssh, f"{inv['SSH_USER']}@{host}", f"mkdir -p {dest}"], check=True)
-    subprocess.run(["scp", "-q", *ssh, *map(str, files), f"{inv['SSH_USER']}@{host}:{dest}/"], check=True)
-    return f"https://{host}/outputs/{subdir}/"
+    push(files, f"/opt/clio/comfyui-docker/studio/output/{subdir}")
+    return f"https://{inventory()['URANIA_MGMT']}/outputs/{subdir}/"
 
 
 _awake = None
@@ -127,7 +132,8 @@ class Comfy:
                                      headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
-                return json.loads(r.read())
+                body = r.read()
+                return json.loads(body) if body else {}     # /free answers with an empty 200
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"POST {path} -> {e.code}: {e.read().decode()[:2000]}") from None
 

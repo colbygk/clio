@@ -1,0 +1,452 @@
+#!/usr/bin/env python3.11
+"""lora — a character LoRA: a small add-on that teaches the image model one character (workflow 1).
+
+    lora dataset cat [--variants 2eye] [--poses 0,3] [-n 2]   draw the pose library, checked + published
+    lora sheet   cat [--variant kitten2eye]   every drawing so far, numbered (picked ones marked)
+    lora pick    cat 12 15 31 …          put drawings #12, #15, #31 into the training set
+    lora drop    cat 15                  take #15 back out
+    lora review  cat                     contact sheet of the training set as it stands
+    lora apply   cat <answers-dir>       rebuild the training set from the review page's answers
+
+Every drawing has one permanent number (lora/numbers.json), the same on every sheet, so a pick
+is just the numbers you see (Colby, 2026-10-21: row/column picking was too fiddly).
+    lora train   cat [--steps 1200] [--rank 16]     train on urania (musubi-tuner); installs into the model store
+    lora status  cat
+
+The pose library and caption template are character.toml's [lora] section. Each candidate is
+drawn from the variant's approved sheet art on plain white, gets the ruled sticker outline
+(pipeline/ink.py) and an anatomy check (pipeline/check.py), and is published to
+https://urania.cgk.sh/outputs/<character>/lora/ for picking. The training set — images and their
+captions — lives in the package's lora/dataset/ and is committed: it IS the character, as far as
+the LoRA is concerned. Trained files land in the shared model store under loras/characters/,
+visible to both studios; bin/keys uses the newest one when character.toml names it.
+"""
+import argparse
+import json
+import random
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from pipeline import check, graphs, ink  # noqa: E402
+from pipeline.comfy import Comfy, inventory, keep_awake, publish, push  # noqa: E402
+from pipeline.episode import Episode  # noqa: E402
+
+CHARS = REPO / "projects/cat/characters"
+SIZE = 1024
+# the outline is drawn afterwards by rule (pipeline/ink.py); one the model draws would double it
+NO_OUTLINE = "No outline round the character: its black shape meets the white paper directly. "
+# how far out a model-drawn outline is wiped on these plain-white drawings (Colby flagged #1 and #4:
+# theirs reached ~25 px at 1024, past the 18 used at first; it trims far whisker tips a little)
+CLEAR = 34
+FONT = "/System/Library/Fonts/Supplemental/Arial.ttf"
+STORE_LORAS = "/opt/clio/comfyui-docker/basedir/models/loras/characters"
+STUDIO = "/opt/clio/comfyui-docker/studio"
+
+
+class Char:
+    def __init__(self, cid):
+        self.id = cid
+        self.dir = CHARS / cid
+        self.spec = tomllib.loads((self.dir / "character.toml").read_text())
+        self.lora = self.spec["lora"]
+        self.approved = json.loads((self.dir / "approved.json").read_text())
+        self.data = self.dir / "lora" / "dataset"
+
+    def refs(self, variant):
+        """Up to three approved sheet images for a variant: its own views first, then those of the
+        variant it derives from (a kitten has only its head designed; its body borrows the teen's)."""
+        out = []
+        chain = [variant, self.spec["variants"][variant].get("derive_from")]
+        for n, v in enumerate(filter(None, chain)):
+            # the parent lends body views only: its head would override the variant's own. Two refs,
+            # not three: with both body views the model copied their walk/sit for every pose.
+            for view in (("head_front",) if n == 0 else ()) + ("body_quadruped_side",):
+                rel = self.approved.get(v, {}).get(view)
+                p = self.dir / rel if rel else None
+                if p is None and view == "head_front" and "derive_from" not in self.spec["variants"][v]:
+                    p = self.dir / self.spec["character"]["source"] if self.spec["character"].get("source") else None
+                if p and p.exists() and len(out) < 2:
+                    out.append(p)
+        return out
+
+    def who(self, variant):
+        return Episode.describe_static(self.id, variant)
+
+    def caption(self, variant, pose):
+        # short on purpose: trigger, design, pose. "Codubee, " is dropped because the trigger names him.
+        who = Episode._describe(self.id, variant)[1].split(", ", 1)[-1]
+        return self.lora["caption"].format(trigger=self.lora["trigger"], who=who, pose=pose)
+
+
+def direction(ch, variant, pose, n_refs):
+    imgs = " and ".join(f"image {i}" for i in range(1, n_refs + 1))
+    young = ("This is the KITTEN version: the big head and eyes of image 1, a small round body and short "
+             "legs. " if variant.startswith("kitten") else "")
+    return (f"Draw this exact character in a NEW POSE: {pose}. The character is {ch.who(variant)}. "
+            f"{imgs} show only the character's DESIGN (shapes, eyes, nose, proportions, line quality): keep "
+            f"those exactly, but do NOT copy the pose of the reference images; the pose is: {pose}. {young}"
+            f"{NO_OUTLINE if ch.lora.get('outline') else ''}"
+            f"{ch.spec['style']['prompt']} One single character, whole figure visible, centred on plain "
+            f"white paper with nothing else in the picture.")
+
+
+def numbers(ch):
+    """number -> candidate (variant/pose/seed), and the reverse. Numbers are permanent: a new
+    drawing gets the next one, nothing is ever renumbered."""
+    f = ch.dir / "lora" / "numbers.json"
+    fwd = {int(k): v for k, v in json.loads(f.read_text()).items()} if f.exists() else {}
+    return fwd, {v: k for k, v in fwd.items()}
+
+
+def number(ch, rel):
+    fwd, rev = numbers(ch)
+    if rel not in rev:
+        rev[rel] = max(fwd, default=0) + 1
+        fwd[rev[rel]] = rel
+        f = ch.dir / "lora" / "numbers.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({str(k): fwd[k] for k in sorted(fwd)}, indent=0) + "\n")
+    return rev[rel]
+
+
+def cand(ch, rel):
+    return ch.dir / "candidates" / "lora" / f"{rel}.png"
+
+
+def contact(ch, tiles, name, per_row=8):
+    """tiles: [(label, path)]; the label's first word is the drawing's number, printed large."""
+    out = ch.dir / "candidates" / "_review" / f"{name}_{time.strftime('%Y%m%d-%H%M%S')}.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    args = []
+    for label, path in tiles:
+        args += ["-label", label, str(path)]
+    subprocess.run(["magick", "montage", "-font", FONT, "-pointsize", "30", *args, "-resize", "260x260",
+                    "-tile", f"{per_row}x", "-geometry", "+6+6", str(out)], check=True)
+    return publish([out], f"{ch.id}/lora") + out.name
+
+
+def cmd_dataset(a):
+    ch = Char(a.character)
+    variants = a.variants.split(",") if a.variants else ch.lora["variants"]
+    poses = list(enumerate(ch.lora["poses"]))
+    if a.poses:
+        poses = [poses[int(i)] for i in a.poses.split(",")]
+    neg = ch.spec["style"].get("negative", "") + ", standing upright on hind legs, arms, extra limbs, background, scenery"
+    tiles = []
+    with Comfy(a.node) as c:
+        for variant in variants:
+            refs = ch.refs(variant)
+            names = [c.upload(r, subfolder=f"{ch.id}/refs", name=f"{r.parent.name}_{r.name}") for r in refs]
+            for i, pose in poses:
+                prompt = direction(ch, variant, pose, len(refs)) + (f" {a.note}" if a.note else "")
+                for _ in range(a.n):
+                    seed = random.randrange(1, 2**31)
+                    g, _ = graphs.qwen_edit(prompt, names, seed, SIZE, SIZE, f"{ch.id}/lora/{variant}_{i:02d}_s{seed}",
+                                            negative=neg)
+                    raw = ch.dir / "candidates" / "lora" / variant / f"{i:02d}" / f"{seed}.raw.png"
+                    raw.parent.mkdir(parents=True, exist_ok=True)
+                    c.fetch(c.wait(c.submit(g))[0], raw)
+                    out = raw.with_name(f"{seed}.png")
+                    if ch.lora.get("outline"):
+                        ink.outline(raw, out, "close" if "close-up" in pose else "medium", clear=CLEAR)
+                    else:
+                        shutil.copyfile(raw, out)
+                    rep = check.check(c, out, [f"{ch.id}:{variant}"], subfolder=f"{ch.id}/check")
+                    flag = "" if rep["ok"] else "  ✗ " + "; ".join(rep["problems"])
+                    n = number(ch, f"{variant}/{i:02d}/{seed}")
+                    tiles.append((f"{n}{'  ✗' if not rep['ok'] else ''}", out))
+                    with (ch.dir / "runs.jsonl").open("a") as f:
+                        f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "lora-candidate",
+                                            "variant": variant, "pose": i, "seed": seed, "prompt": prompt,
+                                            "negative": neg, "refs": [str(r.relative_to(ch.dir)) for r in refs],
+                                            "check": rep, "node": a.node}) + "\n")
+                    print(f"  #{n}  {variant} pose {i:02d} seed {seed}{flag}")
+    for k in range(0, len(tiles), 48):
+        print(f"review: {contact(ch, tiles[k:k + 48], f'candidates_{k // 48:02d}')}")
+
+
+def cmd_sheet(a):
+    ch = Char(a.character)
+    fwd, _ = numbers(ch)
+    picked = {p.stem for p in dataset(ch)}
+    tiles = [(f"{n}{'  ✓' if rel.replace('/', '_') in picked else ''}", cand(ch, rel)) for n, rel in sorted(fwd.items())
+             if (not a.variant or rel.startswith(a.variant + "/")) and cand(ch, rel).exists()]
+    for k in range(0, len(tiles), 96):
+        name = f"all_{a.variant or 'variants'}_{k // 96:02d}"
+        print(f"review: {contact(ch, tiles[k:k + 96], name)}")
+    print("  ✓ = in the training set.  pick: lora pick cat <numbers>")
+
+
+def cmd_pick(a):
+    ch = Char(a.character)
+    fwd, _ = numbers(ch)
+    ch.data.mkdir(parents=True, exist_ok=True)
+    for n in a.numbers:
+        rel = fwd[n]
+        variant, pose_i, seed = rel.split("/")
+        pose = ch.lora["poses"][int(pose_i)]
+        stem = rel.replace("/", "_")
+        shutil.copyfile(cand(ch, rel), ch.data / f"{stem}.png")
+        (ch.data / f"{stem}.txt").write_text(ch.caption(variant, pose) + "\n")
+        print(f"  + #{n} {stem}: {pose}")
+
+
+def cmd_drop(a):
+    ch = Char(a.character)
+    fwd, _ = numbers(ch)
+    for n in a.numbers:
+        stem = fwd[n].replace("/", "_")
+        for ext in (".png", ".txt"):
+            (ch.data / f"{stem}{ext}").unlink(missing_ok=True)
+        print(f"  - #{n} {stem}")
+
+
+def cmd_apply(a):
+    """The review page (https://claude.ai/artifact/5CVsL272WN9NcTwG18edPq) stores one row per drawing:
+    {verdict: yes|no|null, description}. Read with ArtifactData list ... out_dir=<answers-dir>; the
+    rows land in <answers-dir>/reviews/<number>.json. Yes = in the set, with the description as the
+    pose part of its caption; a drawing never decided keeps the pick it had (`lora pick`). Every
+    image in the set is re-outlined from its raw drawing, so all carry the same outline."""
+    ch = Char(a.character)
+    fwd, _ = numbers(ch)
+    rows = {}
+    for f in Path(a.answers).glob("reviews/*.json"):
+        j = json.loads(f.read_text())
+        rows[int(f.stem)] = j.get("data", j)
+    before = {p.stem for p in dataset(ch)}
+    for p in dataset(ch):
+        p.unlink(); p.with_suffix(".txt").unlink(missing_ok=True)
+    ch.data.mkdir(parents=True, exist_ok=True)
+    kept = 0
+    for n, rel in sorted(fwd.items()):
+        r = rows.get(n, {})
+        stem = rel.replace("/", "_")
+        verdict = r.get("verdict") or ("yes" if stem in before else None)
+        if verdict != "yes":
+            continue
+        variant, pose_i, _ = rel.split("/")
+        pose = ch.lora["poses"][int(pose_i)]
+        desc = (r.get("description") or pose).strip().rstrip(".")
+        raw = cand(ch, rel).with_name(cand(ch, rel).stem + ".raw.png")
+        if ch.lora.get("outline") and raw.exists():
+            ink.outline(raw, ch.data / f"{stem}.png", "close" if "close-up" in pose else "medium", clear=CLEAR)
+        else:
+            shutil.copyfile(cand(ch, rel), ch.data / f"{stem}.png")
+        (ch.data / f"{stem}.txt").write_text(ch.caption(variant, desc) + "\n")
+        kept += 1
+    print(f"  training set: {kept} images (was {len(before)})")
+
+
+def dataset(ch):
+    return sorted(ch.data.glob("*.png")) if ch.data.exists() else []
+
+
+def cmd_review(a):
+    ch = Char(a.character)
+    _, rev = numbers(ch)
+    tiles = [(str(rev.get(p.stem.replace("_", "/"), p.stem)), p) for p in dataset(ch)]
+    if not tiles:
+        sys.exit("training set is empty: lora pick first")
+    print(f"review: {contact(ch, tiles, 'dataset')}")
+
+
+def cmd_train(a):
+    """musubi-tuner on urania (Colby, 2026-11-04). ComfyUI's own trainer ran the node out of memory at
+    768 and at 512 px; musubi holds the 20B model in fp8 (~30 GB). It trains the edit model the way
+    bin/keys uses it: each picture is learnt as "these design refs + caption -> this drawing". ComfyUI
+    on the node is stopped for the run (it holds the same memory) and started again when it ends,
+    whatever happens; samples land in the gallery every --every steps so a bad run can be stopped."""
+    keep_awake()
+    ch = Char(a.character)
+    files = dataset(ch)
+    if len(files) < 10:
+        sys.exit(f"only {len(files)} images in the training set; pick at least 10")
+    trigger = ch.lora["trigger"]
+    stamp = time.strftime("%Y%m%d-%H%M")
+    inv = inventory()
+    ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-i", inv["SSH_KEY"],
+           f"{inv['SSH_USER']}@{inv['URANIA_MGMT']}"]
+    run = f"{MUSUBI}/runs/{trigger}_{stamp}"
+    gallery = f"{ch.id}/lora/train_{stamp}"
+    out = f"{STUDIO}/output/{gallery}"
+
+    # control images: the variant's design refs, the same ones the pictures were drawn from
+    ctl = []
+    for f in files:
+        for i, r in enumerate(ch.refs(f.stem.rsplit("_", 2)[0])):
+            ctl.append((r, f"{f.stem}_{i}{r.suffix}"))
+    stage = Path(tempfile.mkdtemp())
+    for r, name in ctl:
+        shutil.copyfile(r, stage / name)
+    push([*files, *[f.with_suffix(".txt") for f in files]], f"{run}/img")
+    push(sorted(stage.iterdir()), f"{run}/ctl")
+    shutil.rmtree(stage)
+
+    sample_refs = {v: ch.refs(v)[0] for v in ch.lora["variants"]}
+    push(list(sample_refs.values()), f"{run}/sample_refs")
+    samples = "".join(f"{ch.caption(v, SAMPLE_POSES[i % len(SAMPLE_POSES)])} --w 768 --h 432 --s 20 --l 4.0 --d 7 "
+                      f"--ci {run}/sample_refs/{r.name}\n" for i, (v, r) in enumerate(sample_refs.items()))
+    dataset_toml = (f"[general]\nresolution = [{a.size}, {a.size}]\ncaption_extension = \".txt\"\nbatch_size = 1\n"
+                    f"enable_bucket = true\nbucket_no_upscale = false\n\n[[datasets]]\nimage_directory = \"{run}/img\"\n"
+                    f"control_directory = \"{run}/ctl\"\ncache_directory = \"{run}/cache\"\n"
+                    f"control_resolution = [{a.control}, {a.control}]\nnum_repeats = 1\n")
+    script = MUSUBI_RUN.format(run=run, out=out, trigger=trigger, steps=a.steps, rank=a.rank, lr=a.lr,
+                               every=a.every, store=STORE_LORAS, tag=f"{trigger}_{stamp[:8]}_r{a.rank}")
+    for name, text in (("dataset.toml", dataset_toml), ("samples.txt", samples), ("run.sh", script)):
+        subprocess.run([*ssh, f"mkdir -p {run} {out} && cat > {run}/{name}"], input=text, text=True, check=True)
+    watch = start_watchdog(ssh, a.floor)
+    # stdin too, or ssh waits for the whole run (it did, 2026-11-04: no progress for 5 hours)
+    subprocess.run([*ssh, f"cd {run} && setsid nohup bash run.sh > {out}/log.txt 2>&1 < /dev/null &"], check=True)
+    print(f"  training {trigger} on {len(files)} images, {a.steps} steps, rank {a.rank}, {a.size} px (urania)")
+    print(f"  ComfyUI on urania is stopped until it ends; samples every {a.every} steps:")
+    print(f"  https://{inv['URANIA_MGMT']}/outputs/{gallery}/sample/")
+    t0, seen = time.time(), ""
+    try:
+        while True:
+            time.sleep(60)
+            tail = subprocess.run([*ssh, f"tail -c 4000 {out}/log.txt"], capture_output=True, text=True).stdout
+            steps = re.findall(r"steps:\s+\d+%\|[^|]*\|\s*(\d+/\d+) \[([^\]<]*)<([^,\]]*)", tail)
+            if steps and steps[-1] != seen:
+                seen = steps[-1]
+                print(f"  step {seen[0]}  ({seen[1]} in, {seen[2]} to go)", flush=True)
+            if "TRAIN-DONE" in tail or "TRAIN-FAILED" in tail:
+                break
+    finally:
+        print(stop_watchdog(ssh, watch))
+    mins = (time.time() - t0) / 60
+    if "TRAIN-FAILED" in tail:
+        sys.exit(f"  training failed after {mins:.0f} min; log: https://{inv['URANIA_MGMT']}/outputs/{gallery}/log.txt")
+    installed = subprocess.run([*ssh, f"ls {STORE_LORAS} | grep {trigger}_{stamp[:8]}_r{a.rank}"],
+                               capture_output=True, text=True).stdout.split()
+    with (ch.dir / "runs.jsonl").open("a") as f:
+        f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "lora-train", "trainer": "musubi-tuner",
+                            "files": [f"characters/{n}" for n in installed], "images": [p.name for p in files],
+                            "steps": a.steps, "rank": a.rank, "lr": a.lr, "size": a.size,
+                            "minutes": round(mins, 1), "node": "urania"}) + "\n")
+    print(f"  done in {mins:.0f} min; in loras/characters/ (both studios): {', '.join(installed)}")
+
+
+# pictures not in the training set, to see whether the character holds up in poses it was not shown
+SAMPLE_POSES = ["sitting on a garden path, blowing on a dandelion", "running flat out across an alley, scared"]
+MUSUBI = "/opt/clio/musubi"
+# one run on the node, so it survives this machine sleeping or losing the connection. The trap
+# starts ComfyUI again however the run ends (watchdog kill included). Checkpoints are converted to
+# ComfyUI's key names ("other") and installed under the run's tag with their step count.
+MUSUBI_RUN = r"""
+set -u
+M={MUSUBI}
+cd $M/musubi-tuner && . .venv/bin/activate
+DIT=$M/models/split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors
+TE=$M/models/split_files/text_encoders/qwen_2.5_vl_7b.safetensors
+VAE=/opt/clio/comfyui-docker/basedir/models/vae/qwen_image_vae.safetensors
+sudo systemctl stop clio-comfyui
+trap 'sudo systemctl start clio-comfyui' EXIT
+set -e
+trap 'echo TRAIN-FAILED' ERR
+python src/musubi_tuner/qwen_image_cache_latents.py --dataset_config {run}/dataset.toml --vae $VAE --model_version edit-2511
+python src/musubi_tuner/qwen_image_cache_text_encoder_outputs.py --dataset_config {run}/dataset.toml --text_encoder $TE \
+  --batch_size 1 --model_version edit-2511
+accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 src/musubi_tuner/qwen_image_train_network.py \
+  --dit $DIT --vae $VAE --text_encoder $TE --model_version edit-2511 --dataset_config {run}/dataset.toml \
+  --sdpa --mixed_precision bf16 --fp8_base --fp8_scaled --gradient_checkpointing \
+  --timestep_sampling qwen_shift --weighting_scheme none \
+  --optimizer_type adamw8bit --learning_rate {lr} --network_module networks.lora_qwen_image \
+  --network_dim {rank} --network_alpha {rank} --max_train_steps {steps} --save_every_n_steps {every} --seed 42 \
+  --max_data_loader_n_workers 2 --persistent_data_loader_workers \
+  --sample_prompts {run}/samples.txt --sample_every_n_steps {every} --sample_at_first \
+  --output_dir {out} --output_name {trigger}
+mkdir -p {store}
+for f in {out}/{trigger}*.safetensors; do
+  n=$(basename $f .safetensors); step=${{n#{trigger}}}; step=${{step#-step}}
+  python src/musubi_tuner/convert_lora.py --input $f --output {store}/{tag}${{step:+_s$((10#$step))}}.safetensors --target other
+done
+echo TRAIN-DONE
+""".replace("{MUSUBI}", MUSUBI)
+
+
+# Training shares the GB10's unified memory with the OS; when it ran out (clio, 2026-10-22) the box
+# stopped answering SSH and needed a power cycle. The watchdog runs on the node itself, so it works
+# even when this machine loses the connection: below `floor` GB available it kills the trainer, and
+# the training fails instead of the node hanging (the run script then starts ComfyUI again).
+# 768 px with offloading still reached 7 GB available on urania once training began (2026-10-29).
+WATCHDOG = r"""
+low=999999
+while true; do
+  a=$(awk '/MemAvailable/ {{print int($2/1048576)}}' /proc/meminfo)
+  [ "$a" -lt "$low" ] && low=$a && echo "$low" > /tmp/lora-watchdog.low
+  if [ "$a" -lt {floor} ]; then
+    echo "killed at ${{a}} GB available" > /tmp/lora-watchdog.fired
+    pkill -9 -f '[s]rc/musubi_tuner'
+    exit
+  fi
+  sleep 1
+done
+"""
+
+
+def start_watchdog(ssh, floor):
+    script = WATCHDOG.format(floor=floor)
+    cmd = f"sudo rm -f /tmp/lora-watchdog.*; nohup sudo bash -c {shlex.quote(script)} >/dev/null 2>&1 & echo $!"
+    pid = subprocess.run([*ssh, cmd], capture_output=True, text=True, check=True).stdout.strip()
+    print(f"  memory watchdog on the node: stops the training below {floor} GB available")
+    return pid
+
+
+def stop_watchdog(ssh, pid):
+    out = subprocess.run([*ssh, f"sudo pkill -P {pid}; sudo kill {pid} 2>/dev/null; "
+                                "cat /tmp/lora-watchdog.fired 2>/dev/null; cat /tmp/lora-watchdog.low"],
+                         capture_output=True, text=True).stdout.split()
+    if "killed" in out:
+        return "  watchdog FIRED: " + " ".join(out[:-1])
+    return f"  lowest available memory during training: {out[-1] if out else '?'} GB"
+
+
+def cmd_status(a):
+    ch = Char(a.character)
+    have = {}
+    for p in dataset(ch):
+        v, i, _ = p.stem.rsplit("_", 2)
+        have.setdefault(v, set()).add(int(i))
+    for v in ch.lora["variants"]:
+        got = have.get(v, set())
+        marks = "".join("●" if i in got else "○" for i in range(len(ch.lora["poses"])))
+        print(f"  {v:11} {marks}  {len(got)}/{len(ch.lora['poses'])} poses")
+    print(f"  training set: {len(dataset(ch))} images")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="lora", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    d = sub.add_parser("dataset"); d.add_argument("character"); d.add_argument("--variants"); d.add_argument("--poses")
+    d.add_argument("-n", type=int, default=2); d.add_argument("--note")
+    d.add_argument("--node", default="urania", choices=["urania", "clio"]); d.set_defaults(f=cmd_dataset)
+    k = sub.add_parser("pick"); k.add_argument("character"); k.add_argument("numbers", nargs="+", type=int); k.set_defaults(f=cmd_pick)
+    r = sub.add_parser("drop"); r.add_argument("character"); r.add_argument("numbers", nargs="+", type=int); r.set_defaults(f=cmd_drop)
+    ap = sub.add_parser("apply"); ap.add_argument("character"); ap.add_argument("answers"); ap.set_defaults(f=cmd_apply)
+    h = sub.add_parser("sheet"); h.add_argument("character"); h.add_argument("--variant"); h.set_defaults(f=cmd_sheet)
+    v = sub.add_parser("review"); v.add_argument("character"); v.set_defaults(f=cmd_review)
+    t = sub.add_parser("train"); t.add_argument("character"); t.add_argument("--steps", type=int, default=1200)
+    t.add_argument("--rank", type=int, default=16); t.add_argument("--lr", type=float, default=1e-4)
+    t.add_argument("--size", type=int, default=768, help="longer edge of the training images")
+    t.add_argument("--every", type=int, default=200, help="save a checkpoint and draw samples every N steps")
+    # the design refs are most of each step's work: two at 1024 px made a step 27 s on urania
+    # (1500 steps = 11 h, 2026-11-04); at 512 the refs still show the design, at a third of the cost
+    t.add_argument("--control", type=int, default=512, help="size the design refs are trained at")
+    t.add_argument("--floor", type=int, default=8, help="GB of available memory below which the watchdog stops it")
+    t.set_defaults(f=cmd_train)
+    s = sub.add_parser("status"); s.add_argument("character"); s.set_defaults(f=cmd_status)
+    a = p.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

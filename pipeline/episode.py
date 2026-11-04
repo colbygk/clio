@@ -86,6 +86,10 @@ class Episode:
     def ref_for(self, cast, pose, camera=""):
         """Pick the approved sheet image that best matches what this key asks the character to do.
         Keyword-based on purpose: it is a starting reference, and the pose text still directs."""
+        # The episode's own [refs] win: a drawing Colby picked from this episode as the design to
+        # hold to (2026-10-29: Friend from s040 k1, the teen's head from s120 k0)
+        if cast in self.spec.get("refs", {}):
+            return self.dir / self.spec["refs"][cast], "episode_ref"
         char, variant = self.parse_cast(cast)
         pkg = PROJECT / "characters" / char
         approved = json.loads((pkg / "approved.json").read_text()) if (pkg / "approved.json").exists() else {}
@@ -102,7 +106,10 @@ class Episode:
         if re.search(r"\b(sit|sitting|sits|crouch|licking|panting|watching|alone|dropping)", p):
             wants.append("body_sit_front")
         wants += ["body_quadruped_side", "body_sit_front", "head_front"]
+        scene = spec["character"].get("scene_ref")
         for view in wants:
+            if scene and view.startswith("body_"):
+                return pkg / scene, "scene_ref"
             if view in have:
                 return pkg / have[view], view
             # the base variant's head is Colby's original drawing, never recorded in approved.json
@@ -111,14 +118,38 @@ class Episode:
                 return pkg / spec["character"]["source"], view
         raise LookupError(f"{cast}: nothing approved yet")
 
-    def describe(self, cast):
-        """How a cast member is named and pinned down in a key-frame direction."""
-        char, variant = self.parse_cast(cast)
+    def describe(self, cast, body=True):
+        """How a cast member is named and pinned down in a key-frame direction. Codubee's outline is
+        not asked for: pipeline/ink.py draws it on every frame by rule."""
+        # body=False for face close-ups: the anatomy rule ("stands, walks ... on all fours") made the
+        # model pull back to a full figure (v2 s160/s170)
+        return self._describe(*self.parse_cast(cast))[0], self.describe_static(*self.parse_cast(cast), body=body)
+
+    @classmethod
+    def describe_static(cls, char, variant, body=True):
+        """The description alone, with the character's anatomy rule; bin/lora captions use it too."""
+        desc = cls._describe(char, variant)[1]
+        anatomy = cls.character(char)["character"].get("anatomy")
+        return f"{desc}, {anatomy}" if anatomy and body else desc
+
+    def lora_for(self, cast):
+        """(LoRA file, strength, trigger) for a cast member, once its character.toml [lora] names a
+        trained file in `use`; None until then."""
+        char, _ = self.parse_cast(cast)
+        lo = self.character(char).get("lora", {})
+        return (lo["use"], lo.get("strength", 1.0), lo["trigger"]) if lo.get("use") else None
+
+    @staticmethod
+    def character(char):
+        return tomllib.loads((PROJECT / "characters" / char / "character.toml").read_text())
+
+    @staticmethod
+    def _describe(char, variant):
         if char == "cat":
-            eyes = "THREE eyes (two side by side and a third centred on the forehead)" if variant == "3eye" \
+            eyes = "THREE eyes (two side by side and a third centred on the forehead)" if variant.endswith("3eye") \
                 else "exactly TWO eyes and no eye on the forehead"
             age = "a small black kitten" if variant.startswith("kitten") else "a lanky teenage black cat"
-            return "Codubee", f"Codubee, {age} with {eyes}, drawn as a flat solid black shape with a thin white sticker outline"
+            return "Codubee", f"Codubee, {age} with {eyes}, drawn as a flat solid black shape"
         if char == "friend":
             return "Friend", "Friend, a lanky white cat drawn only in loose black brush-pen lines, with a minimal face"
         return char, char

@@ -2,12 +2,18 @@
 """cut — assemble an episode: in-betweens on the shot list's timeline, plus its audio.
 
     cut ep01 [--version v1]       -> episodes/ep01/out/ep01_<version>.mp4, published to the gallery
+    cut ep01 --animatic           -> ep01_animatic_<version>.mp4: key frames held, no in-betweens
+
+Two speeds of the same cut. The ANIMATIC is for working out the story: keys and temp sound only,
+minutes to make, watched, noted, fed back into the script. The RENDER waits until the animatic is
+right, because in-betweens cost hours.
 
 Each shot is its tween clips laid end to end, trimmed or held to exactly the shot's length, scaled
 to 1280x720 at 24 fps. `transition = "match_dissolve"` dissolves into the next shot (1 s);
 `"fade_out"` fades to white. Audio: dialogue and sound effects at their cue times, music cues under
 them, mixed and muxed. A missing clip becomes the shot's held key frame, so a partial episode still
-plays at the right length.
+plays at the right length. Codubee's sticker outline is drawn on every frame by rule
+(pipeline/ink.py) unless the shot says `outline = false`; inked clips are cached beside the tween.
 """
 import argparse
 import subprocess
@@ -16,6 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+from pipeline import ink  # noqa: E402
 from pipeline.comfy import publish  # noqa: E402
 from pipeline.episode import Episode  # noqa: E402
 
@@ -40,23 +47,36 @@ def norm(src, secs, out, still=False):
                "-an", "-pix_fmt", "yuv420p", str(out))
 
 
-def render_shot(ep, shot, work, extra=0.0):
+def inked(ep, shot, src, work):
+    """src with Codubee's outline drawn by rule; clips are cached as <clip>.ink.mp4."""
+    if not shot.get("outline", True):
+        return src
+    cam = shot.get("camera", "medium")
+    if src.suffix == ".png":     # keys are inked at approval; re-inking an inked frame is a no-op
+        return ink.outline(src, work / f"{shot['id']}_{src.stem}_ink.png", cam)
+    out = src.with_suffix(".ink.mp4")
+    if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
+        ink.outline_video(src, out, cam)
+    return out
+
+
+def render_shot(ep, shot, work, extra=0.0, animatic=False):
     """The shot as one clip; `extra` seconds of held last frame for a dissolve to eat into."""
     parts = []
     segs = ep.segments(shot)
     for n, (i, j, secs) in enumerate(segs):
         clip = ep.dir / "tweens" / shot["id"] / f"seg{n}.mp4"
         part = work / f"{shot['id']}_{n}.mp4"
-        if clip.exists():
-            norm(clip, secs, part)
+        if clip.exists() and not animatic:
+            norm(inked(ep, shot, clip, work), secs, part)
         else:
-            norm(ep.dir / "keys" / shot["id"] / f"k{i}.png", secs, part, still=True)
+            norm(inked(ep, shot, ep.dir / "keys" / shot["id"] / f"k{i}.png", work), secs, part, still=True)
         parts.append(part)
     held = shot["seconds"] - sum(s for *_, s in segs) + extra
     if held > 0.01:      # time after the last key that is too short to animate: hold the last key
         k = len(shot["keys"]) - 1
         part = work / f"{shot['id']}_hold.mp4"
-        norm(ep.dir / "keys" / shot["id"] / f"k{k}.png", held, part, still=True)
+        norm(inked(ep, shot, ep.dir / "keys" / shot["id"] / f"k{k}.png", work), held, part, still=True)
         parts.append(part)
     lst = work / f"{shot['id']}.txt"
     lst.write_text("".join(f"file '{p}'\n" for p in parts))
@@ -65,13 +85,13 @@ def render_shot(ep, shot, work, extra=0.0):
     return out
 
 
-def audio_events(ep):
+def audio_events(ep, sfx=True):
     """[(file, start seconds, level)] for every dialogue line, effect and music cue."""
     ev = []
     for shot in ep.shots:
         for n, line in enumerate(shot.get("lines", [])):
             ev.append((ep.dir / "audio" / "lines" / f"{shot['id']}_{n}.wav", shot["start"] + line["at"], LEVELS["lines"]))
-        for n, cue in enumerate(shot.get("sfx", [])):
+        for n, cue in enumerate(shot.get("sfx", []) if sfx else []):
             ev.append((ep.dir / "audio" / "sfx" / f"{shot['id']}_{n}.wav", shot["start"] + cue["at"], LEVELS["sfx"]))
     for cue, start, _ in ep.music_spans():
         ev.append((ep.dir / "audio" / "music" / f"{cue}.flac", start, LEVELS["music"]))
@@ -87,8 +107,8 @@ def cmd_cut(a):
     while i < len(shots):
         s = shots[i]
         if s.get("transition") == "match_dissolve" and i + 1 < len(shots):
-            a_clip = render_shot(ep, s, work, extra=DISSOLVE)
-            b_clip = render_shot(ep, shots[i + 1], work)
+            a_clip = render_shot(ep, s, work, extra=DISSOLVE, animatic=a.animatic)
+            b_clip = render_shot(ep, shots[i + 1], work, animatic=a.animatic)
             out = work / f"{s['id']}_x_{shots[i + 1]['id']}.mp4"
             ffmpeg("-i", str(a_clip), "-i", str(b_clip), "-filter_complex",
                    f"[0:v][1:v]xfade=transition=fade:duration={DISSOLVE}:offset={s['seconds']}[v]",
@@ -96,7 +116,7 @@ def cmd_cut(a):
             pieces.append(out)
             i += 2
         else:
-            pieces.append(render_shot(ep, s, work))
+            pieces.append(render_shot(ep, s, work, animatic=a.animatic))
             i += 1
         print(f"  {s['id']} ok")
     lst = work / "all.txt"
@@ -108,8 +128,8 @@ def cmd_cut(a):
     ffmpeg("-f", "concat", "-safe", "0", "-i", str(lst), *(["-vf", fade] if fade else []),
            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "18", str(picture))
 
-    ev = audio_events(ep)
-    out = ep.path("out", f"{ep.id}_{a.version}.mp4")
+    ev = audio_events(ep, sfx=not a.no_sfx)
+    out = ep.path("out", f"{ep.id}_{'animatic_' if a.animatic else ''}{a.version}.mp4")
     if ev:
         inputs, chains = [], []
         for n, (f, start, lvl) in enumerate(ev):
@@ -130,6 +150,8 @@ def cmd_cut(a):
 def main():
     p = argparse.ArgumentParser(prog="cut", description=__doc__.split("\n\n")[0])
     p.add_argument("episode"); p.add_argument("--version", default="v1")
+    p.add_argument("--animatic", action="store_true", help="key frames held, no in-betweens")
+    p.add_argument("--no-sfx", action="store_true", help="leave the stand-in effects out of the mix")
     cmd_cut(p.parse_args())
 
 

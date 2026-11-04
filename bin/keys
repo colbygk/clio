@@ -5,7 +5,8 @@
     keys approve-set ep01 alley_dusk 1234 make a backdrop canonical
     keys run      ep01 [--shots s010,s020] [-n 2] [--note "..."]   candidates for each key frame
     keys approve  ep01 s010 0 1234        make candidate seed 1234 the canonical key 0 of s010
-    keys auto     ep01                    approve the first candidate of every key not yet approved
+    keys run      ep01 --auto -n 3        unsupervised animatic pass: each key approved as it is drawn
+    keys auto     ep01                    approve the best-checked candidate of every open key
     keys review   ep01 [--shots …]        contact sheets of the candidates (approved ones marked *)
     keys status   ep01
 
@@ -17,6 +18,7 @@ contact sheet to https://urania.cgk.sh/outputs/cat/<ep>/review/ and appends its 
 import argparse
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -25,11 +27,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from pipeline import graphs  # noqa: E402
+from pipeline import check, graphs, ink  # noqa: E402
 from pipeline.comfy import Comfy, publish  # noqa: E402
 from pipeline.episode import Episode  # noqa: E402
 
 W, H = 1280, 720
+# Animatic keys are drafts: Colby, 2026-10-29, "much smaller versions" to iterate faster. 768x432 is
+# 16:9 on Qwen-Image's 16 px grid at about a third of the pixels; bin/cut scales every frame to
+# 1280x720 anyway. `run --full` draws at W x H for the render.
+DRAFT = (768, 432)
 FRAMING = {
     "wide": "a wide shot: the characters are small in the scene and the setting is fully visible",
     "medium": "a medium shot: the characters fill about half the frame",
@@ -37,9 +43,14 @@ FRAMING = {
     "extreme_close": "an extreme close-up on the eyes and forehead",
 }
 STYLE = ("The whole frame is black ink on white paper: no colour, no grey shading, no gradients, "
-         "no text. Keep each character's design exactly as in its reference image: same shapes, same "
-         "eyes, same outline.")
-NEGATIVE = "colour, grey shading, gradient, photo, realistic, 3d render, text, watermark, extra limbs"
+         "no text.")
+# Only when the shot has a cast: v2's empty s030 grew a mascot in all three tries while the style
+# line talked about characters and Codubee.
+STYLE_CAST = ("Keep each character's design exactly as in its reference image: same shapes, same eyes, "
+              "same proportions. Codubee has no outline: his black shape meets the background directly "
+              "(it is added afterwards).")
+NEGATIVE = ("colour, grey shading, gradient, photo, realistic, 3d render, text, watermark, extra limbs, "
+            "six legs, arms, hands, standing upright on hind legs, walking on two legs, human posture, anthropomorphic")
 SET_PROMPT = ("Image 1 is a blank page. Draw on it the empty background of one animation frame: {d}. "
               "Loose black brush-pen ink line art on white paper, like a quick confident sketch: no "
               "fill, no shading, no grey, no colour, and the sky is plain white paper. The place is "
@@ -66,9 +77,9 @@ def contact(ep, label, tiles):
     return publish([out], f"cat/{ep.id}/review") + out.name
 
 
-def generate(c, ep, prompt, refs, seed, prefix, negative=NEGATIVE):
+def generate(c, ep, prompt, refs, seed, prefix, negative=NEGATIVE, loras=(), size=(W, H)):
     names = [c.upload(r, subfolder=f"cat/{ep.id}/refs", name=f"{r.parent.name}_{r.name}") for r in refs]
-    g, _ = graphs.qwen_edit(prompt, names, seed, W, H, prefix, negative=negative)
+    g, _ = graphs.qwen_edit(prompt, names, seed, *size, prefix, negative=negative, loras=loras)
     return c.wait(c.submit(g))[0], names
 
 
@@ -113,18 +124,41 @@ def direction(ep, shot, key, k=0):
     refs = [prev or ep.dir / "sets" / f"{shot['set']}.png"]
     if not refs[0].exists():
         raise LookupError(f"set {shot['set']} not approved yet (keys sets / approve-set)")
-    who = []
-    for i, member in enumerate(cast[:2], start=2):
+    # Each cast member and prop gets its own reference image; Qwen-Image-Edit takes three images
+    # in all, so when a frame needs more, the references after the first are set side by side in
+    # one image and each is pointed at by its place in it.
+    figures = []
+    for member in cast:
         img, view = ep.ref_for(member, key["pose"], shot.get("camera", ""))
-        refs.append(img)
-        name, desc = ep.describe(member)
-        who.append(f"{desc}, drawn exactly like the character in image {i}")
+        name, desc = ep.describe(member, body=shot.get("camera") not in ("close", "extreme_close"))
+        lo = ep.lora_for(member)
+        figures.append((img, f"{lo[2] + ', ' if lo else ''}{desc}", "character"))
+    for prop in key.get("props", shot.get("props", [])):
+        spec = ep.spec["props"][prop]
+        figures.append((ep.dir / spec["ref"], spec["describe"], prop))
+    places = [f"image {i}" for i in range(2, 2 + len(figures))]
+    if len(figures) > 2:
+        rest = figures[1:]
+        combo = ep.path("refs", "combo_" + "_".join(f[0].stem for f in rest) + ".png")
+        if not combo.exists():
+            subprocess.run(["magick", *[str(f[0]) for f in rest], "-resize", "x720", "-bordercolor", "white",
+                            "-border", "24", "+append", str(combo)], check=True)
+        sides = ["on the left", "on the right"] if len(rest) == 2 else ["on the left", "in the middle", "on the right"]
+        places = ["image 2"] + [f"image 3, {side}" for side in sides]
+        refs += [figures[0][0], combo]
+    else:
+        refs += [f[0] for f in figures]
+    who = [f"{desc}, drawn exactly like the {kind} in {place}" for (img, desc, kind), place in zip(figures, places)]
     framing = FRAMING.get(shot.get("camera", "medium"), "a medium shot")
     if not cast:          # no character: "the face fills the frame" made the model invent a person
         framing = framing.split(":")[0]
     if prev:
+        # The previous key stages the frame; it never defines a character. Copying bodies from it is
+        # how v1's drift compounded key to key (lost outlines, upright cats).
         parts = ["Image 1 is the previous frame of this same shot. Keep its background, camera angle, "
-                 "framing and scale exactly; show the next moment of the action."]
+                 "framing and scale exactly, and where each character is; show the next moment of the "
+                 "action. Use image 1 ONLY for the scene and positions: draw each character's body, "
+                 "proportions and design fresh from its own reference image, not from image 1."]
     else:
         parts = [f"Image 1 is the background scene. Redraw it as the backdrop of one animation frame, "
                  f"framed as {framing}, keeping its ink line-art style."]
@@ -132,10 +166,12 @@ def direction(ep, shot, key, k=0):
         parts.append("In the scene: " + "; and ".join(who) + ".")
     elif not prev:
         parts.append("There are no characters, no animals and no people in this frame.")
-    parts += [f"What is happening: {key['pose']}.", STYLE]
-    neg = NEGATIVE + ("" if cast else ", person, face, human, animal")
+    parts += [f"What is happening: {key['pose']}.", STYLE] + ([STYLE_CAST] if cast else [])
+    neg = NEGATIVE + ("" if cast else ", person, face, human, animal, creature, mascot, cartoon character, eyes")
     if any(ep.parse_cast(m)[1] in ("2eye", "kitten2eye") for m in cast):
         neg += ", third eye, eye on forehead"
+    if key.get("avoid"):
+        neg += ", " + key["avoid"]
     return " ".join(parts), neg, refs
 
 
@@ -154,18 +190,33 @@ def cmd_run(a):
                     continue
                 if a.note:
                     prompt += f" {a.note}"
+                loras = sorted({lo[:2] for m in key.get("cast", shot.get("cast", [])) if (lo := ep.lora_for(m))})
                 have = len(list((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png")))
                 todo = a.n if (a.redo or a.note or a.more) else a.n - have   # resuming: only what is missing
+                # Draw every candidate, then check them all: the check runs a different model, and
+                # swapping the two in and out per candidate cost more than the drawing (2026-10-29).
+                drawn = []
                 for _ in range(max(0, todo)):
                     seed = random.randrange(1, 2**31)
                     t0 = time.time()
-                    out, names = generate(c, ep, prompt, refs, seed, f"cat/{ep.id}/keys/{shot['id']}_k{k}_s{seed}", neg)
-                    local = c.fetch(out, ep.path("candidates", shot["id"], f"k{k}", f"{seed}.png"))
-                    tiles.append((f"{shot['id']} k{k} {seed}", local))
+                    out, names = generate(c, ep, prompt, refs, seed, f"cat/{ep.id}/keys/{shot['id']}_k{k}_s{seed}", neg, loras,
+                                         size=(W, H) if a.full else DRAFT)
+                    drawn.append((seed, c.fetch(out, ep.path("candidates", shot["id"], f"k{k}", f"{seed}.png")),
+                                  time.time() - t0))
+                cast = key.get("cast", shot.get("cast", []))
+                for seed, local, secs in drawn:
+                    t0 = time.time()
+                    rep = check.check(c, local, cast, f"cat/{ep.id}/check", shot.get("camera", ""),
+                                      side_on=not re.search(r"\b(face|faces|front|towards|camera|viewer)\b", key["pose"]))
+                    tiles.append((f"{shot['id']} k{k} {seed}{'' if rep['ok'] else ' ✗'}", local))
                     ep.log(kind="key", shot=shot["id"], key=k, seed=seed, prompt=prompt, negative=neg,
-                           refs=[str(r.relative_to(REPO)) for r in refs], node=a.node,
-                           models=graphs.QWEN_EDIT, seconds=round(time.time() - t0, 1))
-                    print(f"  {shot['id']} k{k} seed {seed}  {time.time() - t0:.0f}s")
+                           refs=[str(r.relative_to(REPO)) for r in refs], node=a.node, loras=loras,
+                           models=graphs.QWEN_EDIT, size=list((W, H) if a.full else DRAFT),
+                           seconds=round(secs, 1), check_seconds=round(time.time() - t0, 1), check=rep)
+                    print(f"  {shot['id']} k{k} seed {seed}  draw {secs:.0f}s, check {time.time() - t0:.0f}s"
+                          + ("" if rep["ok"] else "  ✗ " + "; ".join(rep["problems"])))
+                if a.auto:      # approve now, so the shot's next key can be staged on this one
+                    auto_one(ep, shot, k, checks(ep))
     if tiles:
         for i in range(0, len(tiles), 16):    # one sheet per 16 candidates keeps them legible
             print(f"review: {contact(ep, f'keys_{i // 16:02d}', tiles[i:i + 16])}")
@@ -174,22 +225,37 @@ def cmd_run(a):
 def cmd_review(a):
     """Contact sheets of every key's candidates (approved key marked), published to the gallery."""
     ep = Episode(a.episode)
+    approved = approved_seeds(ep)
     tiles = []
     for shot in ep.select(a.shots):
         for k, _ in enumerate(shot.get("keys", [])):
-            ap = key_path(ep, shot, k)
             for f in sorted((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png"), key=lambda f: f.stat().st_mtime):
-                mark = " *" if ap.exists() and ap.read_bytes() == f.read_bytes() else ""
+                mark = " *" if key_path(ep, shot, k).exists() and approved.get((shot["id"], k)) == f.stem else ""
                 tiles.append((f"{shot['id']} k{k} {f.stem}{mark}", f))
     for i in range(0, len(tiles), 16):
         print(f"review: {contact(ep, f'keys_{i // 16:02d}', tiles[i:i + 16])}")
 
 
+def approved_seeds(ep):
+    """(shot, key) -> seed of the latest approval, from runs.jsonl."""
+    seeds = {}
+    for line in (ep.dir / "runs.jsonl").read_text().splitlines():
+        r = json.loads(line)
+        if r.get("kind") == "approve-key":
+            seeds[(r["shot"], r["key"])] = str(r["seed"])
+    return seeds
+
+
 def approve(ep, shot, k, seed):
+    """The approved key is the candidate with Codubee's outline drawn by rule (pipeline/ink.py), so
+    the in-between starts and ends on the canonical outline and the next key is staged on it."""
     src = ep.dir / "candidates" / shot["id"] / f"k{k}" / f"{seed}.png"
     dest = key_path(ep, shot, k)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
+    if shot.get("outline", True):
+        ink.outline(src, dest, shot.get("camera", "medium"))
+    else:
+        shutil.copyfile(src, dest)
     ep.log(kind="approve-key", shot=shot["id"], key=k, seed=seed)
 
 
@@ -199,14 +265,35 @@ def cmd_approve(a):
     print(f"approved {a.shot} k{a.key} = {a.seed}")
 
 
+def checks(ep):
+    """(shot, key, seed) -> the anatomy check's problems, from runs.jsonl (latest run wins)."""
+    out = {}
+    for line in (ep.dir / "runs.jsonl").read_text().splitlines():
+        r = json.loads(line)
+        if r.get("kind") == "key" and "check" in r:
+            out[(r["shot"], r["key"], str(r["seed"]))] = r["check"]["problems"]
+    return out
+
+
 def cmd_auto(a):
+    """Approve, for every key still open, the oldest candidate that passed the anatomy check, or
+    failing that the one with fewest problems (flagged, so a person looks at it). Keys are staged on
+    the previous key, so run `keys run` again after this to draw the next ones."""
     ep = Episode(a.episode)
+    probs = checks(ep)
     for shot in ep.shots:
         for k, _ in enumerate(shot.get("keys", [])):
-            cands = sorted((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png"), key=lambda f: f.stat().st_mtime)
-            if not key_path(ep, shot, k).exists() and cands:
-                approve(ep, shot, k, cands[0].stem)
-                print(f"  {shot['id']} k{k} = {cands[0].stem}")
+            auto_one(ep, shot, k, probs)
+
+
+def auto_one(ep, shot, k, probs):
+    cands = sorted((ep.dir / "candidates" / shot["id"] / f"k{k}").glob("*.png"), key=lambda f: f.stat().st_mtime)
+    if key_path(ep, shot, k).exists() or not cands:
+        return
+    best = min(cands, key=lambda f: len(probs.get((shot["id"], k, f.stem), [])))
+    p = probs.get((shot["id"], k, best.stem), [])
+    approve(ep, shot, k, best.stem)
+    print(f"  {shot['id']} k{k} = {best.stem}" + (f"  ✗ best available: {'; '.join(p)}" if p else ""))
 
 
 def cmd_status(a):
@@ -229,6 +316,8 @@ def main():
     r = sub.add_parser("run"); r.add_argument("episode"); r.add_argument("--shots"); r.add_argument("-n", type=int, default=2)
     r.add_argument("--note"); r.add_argument("--redo", action="store_true", help="also redo approved keys")
     r.add_argument("--more", action="store_true", help="n fresh candidates for every unapproved key")
+    r.add_argument("--auto", action="store_true", help="approve each key's best-checked candidate as it goes (animatic pass)")
+    r.add_argument("--full", action="store_true", help=f"draw at {W}x{H} for the render (default: {DRAFT[0]}x{DRAFT[1]} drafts)")
     r.add_argument("--node", default="urania", choices=["urania", "clio"]); r.set_defaults(f=cmd_run)
     ap = sub.add_parser("approve"); ap.add_argument("episode"); ap.add_argument("shot"); ap.add_argument("key", type=int)
     ap.add_argument("seed", type=int); ap.set_defaults(f=cmd_approve)
