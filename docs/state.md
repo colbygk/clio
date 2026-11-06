@@ -11,6 +11,17 @@ scale-out design into a **split**: one model role per box). Last updated 2026-08
 | **clio** | `clio.cgk.sh` / `10.10.10.149` (10Gbase-T, MTU 9000) | **ComfyUI** (`:8188`) + **LiteLLM gateway** (`:4000`); GPT-OSS-120B swappable | switchable: LLM capability model **or** image/video — plus the single endpoint |
 | **urania** | `urania.cgk.sh` / `10.10.10.155` (10Gbase-T, MTU 9000; or fabric `10.51.50.12`) | **ComfyUI** (`:8188`) | image / video generation |
 
+### Kernel command line (changed 2026-11-06)
+Both nodes run NVIDIA's stock DGX OS boot options plus a few kept in `/etc/default/grub.d/cmdline.cfg`.
+Until 2026-11-06 that file also carried a low-latency networking recipe, applied with the DOCA-OFED
+install on 2026-05-23 and never needed: `hugepages=24` (1 GiB each — 24 GiB per node that CUDA
+cannot use, so vLLM's startup check failed above ~0.71 utilization), `isolcpus`/`nohz_full`/
+`rcu_nocbs=4-19` (normal processes confined to cores 0-3: `nproc` was 4), `idle=poll`,
+`processor.max_cstate=0`, `preempt=none` and friends. Nothing used them — no DPDK, no OVS bridges,
+no PTP; RoCE/NCCL use the verbs driver. Removed on both; now 20 cores, 0 hugepages, and a
+20-process CPU test runs 4.5x faster. The original line is in `/root/grub.d-cmdline.cfg.lowlatency-20261106`
+on each node. `openibd`/`iwpmd` show as failed units — pre-existing (DOCA DKMS, see Open items), harmless.
+
 ### clio is dual-role — one at a time
 A node has **one** 119 GiB unified-memory pool shared by CPU and GPU, so GPT-OSS-120B and ComfyUI
 cannot coexist on clio (an OOM freezes the box). The systemd units declare `Conflicts=` on each other,
@@ -62,8 +73,22 @@ Full detail: [security.md](security.md).
 - First cold start is long (~20 min): ~63 GB download → load → **MXFP4/sm_121 kernels JIT-compile + CUDA-graph capture**. ~23 tok/s decode. Model cache: `/data/models/hf`.
 - systemd unit `clio-vllm.service` reads `/opt/clio/active-profile.env` and survives reboot.
 
+## Qwen3-VL-235B shard (`local-big`, both nodes) — working 2026-11-06
+`clusterctl shard shard-qwen3-235b` runs `RedHatAI/Qwen3-VL-235B-A22B-Instruct-NVFP4` across both
+nodes (PP=2 over Ray, fabric) and takes **both** boxes: it stops ComfyUI on clio and urania. It
+serves as `local-big` on the gateway, 262,144-token context, fp8 KV (654,608 tokens of KV, 2.5
+full-length requests at once), ~11-15 tok/s. Warm start ~4 min. `clusterctl down` releases the nodes.
+- **Container patch:** `cluster/vllm-mods/fix-qwen3-vl-moe-arch` fixes "No model architectures are
+  specified" in our vLLM image (upstream PR #43272). Delete it when the image is rebuilt.
+- **Weights (152 GB)** are in `/data/models/hf` on each node. Download once on clio and rsync to
+  urania over the fabric (5.5 min); left alone, each node downloads its own copy from Hugging Face.
+
 ## How to use it (see [usage.md](usage.md) for full detail)
-- **Claude Code:** `clusterctl use local-big && source ~/.clio/claude-code.env && claude` (separate shell; your normal `claude` stays on real Claude).
+- **Claude Code:** `clusterctl use local-big && source ~/.clio/claude-code.env && claude` (separate shell; your normal `claude` stays on real Claude). Run `use` while
+  the model is up: it reads the server's context length into `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so re-run it
+  after switching `local-big` between the Qwen shard (262K) and GPT-OSS (64K). It also labels every `/model`
+  entry with the real model name and wraps `claude` in that shell with `--append-system-prompt`, so the
+  model says it is the local Qwen/GPT-OSS rather than repeating Claude Code's "you are Claude".
 - **curl:** `curl http://clio:4000/v1/chat/completions -H "Authorization: Bearer <master key>" -H 'content-type: application/json' -d '{"model":"local-big","messages":[{"role":"user","content":"hi"}]}'`
 - **VS Code:** Continue.dev → model `local-big`, apiBase `http://clio:4000/v1`.
 - **ComfyUI:** `https://clio.cgk.sh/` or `https://urania.cgk.sh/` — client certificate required ([security.md](security.md)). Details: [comfyui-deployed.md](comfyui-deployed.md).

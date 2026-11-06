@@ -9,6 +9,9 @@ Conflicts=clio-vllm.service clio-comfyui.service
 
 [Service]
 Type=simple
+# colby, not root: the launcher reaches urania by ssh, and only colby has that key. colby is in
+# the docker group on both nodes.
+User=colby
 Environment=CLUSTER_DIR=/opt/clio
 ExecStart=/opt/clio/run/serve-shard.sh
 Restart=on-failure

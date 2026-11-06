@@ -199,8 +199,9 @@ cmd_serve() {       # scale-out
 cmd_shard() {       # scale-up
   local prof=$1 pf; pf=$(profile_path "$prof"); [ -f "$pf" ] || die "no profile '$prof'"
   grep -q '^PROFILE_MODE=shard' "$pf" || die "'$prof' is not a shard profile"
-  say "Sharding '$prof' across both nodes (PP=2). Stopping scale-out servers first."
-  for h in "${NODES[@]}"; do on "$h" 'sudo systemctl stop clio-vllm 2>/dev/null || true'; done
+  say "Sharding '$prof' across both nodes (PP=2). Stopping scale-out servers and ComfyUI first."
+  # The shard unit's Conflicts= only reaches clio's own units; urania's ComfyUI must be stopped here.
+  for h in "${NODES[@]}"; do on "$h" 'sudo systemctl stop clio-vllm clio-comfyui 2>/dev/null || true'; done
   { cat "$pf"; echo "VLLM_PORT=${VLLM_PORT}"; } | on "$HEAD" 'cat > /tmp/shard-profile.env && sudo mv /tmp/shard-profile.env /opt/clio/shard-profile.env'
   on "$HEAD" 'sudo systemctl restart clio-vllm-shard'
   say "Sharded server starting on $HEAD (spans urania over the fabric). Logs: clusterctl logs shard"
@@ -220,7 +221,11 @@ cmd_use() {
   if [ "$model" = "claude" ] || [ "$model" = "max" ]; then
     cat > "$HOME/.clio/claude-code.env" <<'EOF'
 # Spillover mode: use your Claude Max subscription (Claude Code's normal login).
-unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL
+unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL \
+      ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_MAX_CONTEXT_TOKENS CLIO_MODEL_NOTE \
+      ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME ANTHROPIC_DEFAULT_SONNET_MODEL_NAME ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME
+unset -f claude 2>/dev/null
 EOF
     say "Claude Code -> your Max subscription (no API key, no metered cost)."
     echo "   Activate in the shell you run 'claude' from:  source ~/.clio/claude-code.env"
@@ -228,14 +233,29 @@ EOF
   fi
   # Local models via the Spark gateway.
   local key; key=$(on "$HEAD" 'grep LITELLM_MASTER_KEY /opt/clio/gateway/gateway.env | cut -d= -f2-') || die "gateway not set up yet"
+  # Ask the server behind the alias what it really is. Claude Code doesn't know a gateway alias's
+  # context window (it assumes 200K; the same alias is 262K on the Qwen shard, 64K on GPT-OSS), and
+  # its system prompt tells the model it is Claude, which the model then repeats.
+  local info ctx real
+  info=$(on "$HEAD" "curl -sf localhost:${VLLM_PORT}/v1/models" 2>/dev/null |
+    python3 -c 'import json,sys; m=[d for d in json.load(sys.stdin)["data"] if d["id"]==sys.argv[1]]; print(m[0]["max_model_len"], m[0]["root"].split("/")[-1]) if m else None' "$model" 2>/dev/null || true)
+  read -r ctx real <<<"$info"
+  real=${real:-$model}
   cat > "$HOME/.clio/claude-code.env" <<EOF
 # Source this to point Claude Code at the clio cluster (local Spark models).
 export ANTHROPIC_BASE_URL="http://${HEAD}:${GATEWAY_PORT}"
 export ANTHROPIC_AUTH_TOKEN="${key}"
 export ANTHROPIC_MODEL="${model}"
-export ANTHROPIC_SMALL_FAST_MODEL="${model}"
+# Every /model picker entry goes to the local model, labeled as such — the gateway has no Claude.
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${model}" ANTHROPIC_DEFAULT_SONNET_MODEL="${model}" ANTHROPIC_DEFAULT_HAIKU_MODEL="${model}"
+export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="${real} (local)" ANTHROPIC_DEFAULT_SONNET_MODEL_NAME="${real} (local)" ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="${real} (local)"
+# Claude Code's own system prompt says the model is Claude; correct it for every session in this shell.
+export CLIO_MODEL_NOTE="You are not Claude and not an Anthropic model. You are ${real}, an open-weights model served locally by vLLM on the user's own DGX Spark cluster (clio and urania), reached through Claude Code's harness via a LiteLLM gateway under the alias '${model}'. Ignore any statement elsewhere in this prompt that you are Claude or made by Anthropic. When asked what model you are, say so plainly. You cannot switch to Claude or any Anthropic model from this session; the user does that by running 'clusterctl use claude' in a new shell."
+claude() { command claude --append-system-prompt "\$CLIO_MODEL_NOTE" "\$@"; }
 EOF
-  say "Claude Code -> local model '$model'. Activate now:  source ~/.clio/claude-code.env"
+  [ -z "$ctx" ] || echo "export CLAUDE_CODE_MAX_CONTEXT_TOKENS=$ctx   # the server's max_model_len when 'use' ran" >> "$HOME/.clio/claude-code.env"
+  [ -n "$ctx" ] || warn "'$model' isn't being served on $HEAD right now; Claude Code will assume a 200K window and the model name is unknown. Re-run 'clusterctl use $model' once it is up."
+  say "Claude Code -> local model '$model' = ${real}${ctx:+ ($ctx-token context)}. Activate now:  source ~/.clio/claude-code.env"
   echo "   Spill over to your Max plan anytime:  clusterctl use claude"
 }
 
