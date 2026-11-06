@@ -60,7 +60,16 @@ for d in "$B/models"/*/; do mkdir -p "$S/models/$(basename "$d")"; done
 chown -R -h 1000:1000 "$S/models"
 log "Studio sees $n model entries"
 
-# ---------- 3. systemd unit ----------
+# ---------- 3. our custom nodes ----------
+# custom_nodes/ is node-local and shared by both profiles. Replace only the directories we ship;
+# everything else there came from the Manager. A running ComfyUI picks them up on its next start.
+for d in "$CLUSTER_DIR"/comfyui/custom_nodes/*/; do
+  [ -d "$d" ] || continue
+  n=$(basename "$d"); rm -rf "${B:?}/custom_nodes/$n"; cp -r "$d" "$B/custom_nodes/$n"
+  chown -R 1000:1000 "$B/custom_nodes/$n"; log "custom node: $n"
+done
+
+# ---------- 4. systemd unit ----------
 COMPOSE_FILE=$(ls "$REPO"/compose-dgx_spark.yaml "$REPO"/compose*spark*.yaml 2>/dev/null | head -1 || true)
 [ -n "$COMPOSE_FILE" ] || warn "compose-dgx_spark.yaml not found in repo — check $REPO and edit clio-comfyui.service"
 log "Installing clio-comfyui.service (compose: ${COMPOSE_FILE:-<not found>})"

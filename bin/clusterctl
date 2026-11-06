@@ -13,8 +13,10 @@
 #   clusterctl comfyui up|down      start/stop ComfyUI on both nodes (in each node's current profile)
 #   clusterctl comfyui sync [node]  push the studio/private profiles + rebuild studio's model list
 #   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
+#   clusterctl mount [input|studio] [dir]   mount a ComfyUI input dir from the store on this Mac
+#   clusterctl unmount [input|studio|dir]   undo it; no argument lists what is mounted
 #   clusterctl lan-mtu <mtu> [node] change management-LAN MTU, verified before it is persisted
-#   clusterctl freemem [node]       drop page cache (diagnostic; rarely the fix — see docs)
+#   clusterctl freemem [node]       drop page cache — lets ComfyUI load models fully, not 'partially'
 #   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
 #   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
 #
@@ -416,12 +418,49 @@ cmd_nginx() {
   esac
 }
 
-# Drop page cache. Keep expectations low: page cache is RECLAIMABLE — the kernel evicts it under
-# pressure and counts it in MemAvailable — so this frees nothing the allocator could not already
-# have taken, and it discards cached model weights that make model reuse fast. ComfyUI's system_stats
-# reports vram_free derived from free system memory, which makes cache LOOK like it is consuming the
-# GPU; that is a reporting artifact, not the allocator's constraint. Kept as a diagnostic for
-# isolating genuine pressure from something else. For allocation failures, restart ComfyUI instead.
+# Mount one of the store's input dirs on this Mac (ceres), so references can be dropped in from
+# Finder. The export is made by 35-comfyui-share.sh for COMFY_STORE_DESK_IP only. Two macOS quirks:
+#   resvport — Linux exports default to `secure` (client port < 1024); the Mac client uses a high
+#              port unless told otherwise, and the refusal surfaces as "Operation not permitted".
+#   soft,intr — a desk mount should give up when urania is down, not hang Finder.
+# input = basedir/input (private profile), studio = studio/input (studio profile).
+store_input() {
+  case "$1" in
+    input)  echo /opt/clio/comfyui-docker/basedir/input;;
+    studio) echo /opt/clio/comfyui-docker/studio/input;;
+    *)      die "unknown share '$1' (input|studio)";;
+  esac
+}
+
+cmd_mount() {
+  local share=${1:-studio} dir src server
+  src=$(store_input "$share"); server=$(resolve_node "$COMFY_STORE_HOST")
+  dir=${2:-/Volumes/$COMFY_STORE_HOST-$share}
+  if mount | grep -q " on $dir (nfs"; then say "$dir is already mounted"; return; fi
+  [ -d "$dir" ] || sudo mkdir -p "$dir"
+  say "$server:$src -> $dir"
+  sudo mount -t nfs -o resvport,soft,intr,vers=3 "$server:$src" "$dir" ||
+    die "mount failed — is the export there?  ssh $server sudo exportfs -v  (fix: re-run 35-comfyui-share.sh)"
+  say "Mounted. Finder: open $dir    Undo: clusterctl unmount $share"
+}
+
+cmd_unmount() {
+  local arg=${1:-} dir
+  if [ -z "$arg" ]; then mount -t nfs | grep . || echo "no NFS mounts"; return; fi
+  case "$arg" in input|studio) dir=/Volumes/$COMFY_STORE_HOST-$arg;; *) dir=$arg;; esac
+  mount | grep -q " on $dir (nfs" || die "$dir is not an NFS mount"
+  sudo umount "$dir"
+  # Only remove the mountpoint this tool made; a directory you named yourself stays.
+  case "$dir" in /Volumes/$COMFY_STORE_HOST-*) sudo rmdir "$dir" 2>/dev/null || true;; esac
+  say "Unmounted $dir"
+}
+
+# Drop page cache. ComfyUI sizes each model load from torch.cuda.mem_get_info, which on the GB10
+# counts page cache as used. Once a session's model reads fill ~50 GB of cache, ComfyUI sees ~3 GB
+# free and loads the model "partially", streaming some weights every step — measured ~8% slower on
+# a 149-frame Wan run (2026-11-05, docs/comfyui-deployed.md). The run in flight keeps its plan; the
+# next model load gets the memory. It is NOT the fix for allocation failures (the 2^64-byte error) —
+# restart ComfyUI for those.
 cmd_freemem() {
   local which=${1:-all} hosts=("${NODES[@]}")
   case "$which" in clio) hosts=("$CLIO_MGMT");; urania) hosts=("$URANIA_MGMT");; all) ;; *) die "freemem [clio|urania]";; esac
@@ -430,7 +469,7 @@ cmd_freemem() {
              a=$(free -g | awk "/^Mem:/{print \$4}")
              echo "  cache freed: ${b} GiB -> free now ${a} GiB"'
   done
-  say "Reclaimed. Re-check what ComfyUI sees: curl .../system_stats | jq .devices[0].vram_free"
+  say "Reclaimed. The next model load should log 'loaded completely' (clusterctl logs comfyui <node>)"
 }
 
 cmd_status() {
@@ -486,9 +525,11 @@ case "${1:-}" in
   comfyui)   shift; cmd_comfyui "$@";;
   nginx)     shift; cmd_nginx "$@";;
   lan-mtu)   shift; cmd_lan_mtu "$@";;
+  mount)     shift; cmd_mount "$@";;
+  unmount|umount) shift; cmd_unmount "$@";;
   preflight) shift; cmd_preflight "$@";;
   freemem)   shift; cmd_freemem "$@";;
   nccl-test) cmd_nccl_test;;
   logs)      shift; cmd_logs "$@";;
-  *) sed -n '2,20p' "$0"; exit 1;;
+  *) sed -n '2,22p' "$0"; exit 1;;
 esac

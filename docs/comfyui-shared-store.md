@@ -37,6 +37,8 @@ If RDMA ever fails to come up, TCP is a drop-in fallback — swap the fstab opti
 **urania (server)**
 - `/etc/exports` → `basedir/{models,input}` exported to **`10.51.50.13` only** (clio's fabric IP).
   Never the LAN. `rw,sync,no_subtree_check,no_root_squash`.
+- The two input dirs (`basedir/input`, `studio/input`) are also exported to ceres (`10.10.10.123`)
+  over the LAN, `all_squash,anonuid=1000`, for `clusterctl mount`. Not models/.
 - `/etc/nfs.conf.d/10-rdma.conf` → `rdma=y`, `rdma-port=20049`. This matters: `/proc/fs/nfsd/portlist`
   is **not** durable, so without this the RDMA listener vanishes on restart and clio's mount fails.
 - `/etc/modules-load.d/rpcrdma.conf` loads the transport at boot.

@@ -37,15 +37,45 @@ parameter to the device, under `partially_load`.
 **Fix: restart ComfyUI** (`clusterctl mode <node> comfy`, or `systemctl restart clio-comfyui`).
 Both nodes generated normally immediately afterwards.
 
-**Do not chase page cache.** It is reclaimable — the kernel evicts it under pressure and counts it
-in `MemAvailable` — so it cannot starve an allocation. ComfyUI reports `vram_free` derived from
-free *system* memory, so cache makes it look like the GPU is full; that is a reporting artifact.
-This was misdiagnosed here first, and dropping caches only slowed model reuse.
+**Page cache was not the cause of this failure** — dropping caches did not fix it; the restart
+did. But page cache *does* cause a different problem, slow generations (next section), so it is
+not merely a reporting artifact.
 
 Root cause of the bad size is still unknown. The image runs NVIDIA's **`comfy-aimdo`** shim
 (`DynamicVRAM`, `Enabled pinned memory 110309.0`, async weight offload, `GPU RAM headroom 7660 MB`)
 which hooks CUDA allocation and is what emits "allowed memory". If it recurs, capture the full
 traceback plus `/system_stats` **before** restarting — the restart destroys the evidence.
+
+## Slow generations: check the frame count first, then page cache
+
+**Most "it got slower" is a longer video.** Wan i2v time grows faster than linearly with `length`
+(frames); on 2026-11-05 a 3-4x slowdown turned out to be 49 → 149 frames, not the machine. Same
+workflow, 8 steps, 480×640-class sizes:
+
+| Frames | Time per video |
+|---|---|
+| 41–49 | 3.5–7 min |
+| 149 | 10.5–11.5 min |
+| 301 | ~30 min |
+
+**Page cache is a smaller, real effect.** ComfyUI sizes each model load from
+`torch.cuda.mem_get_info` (`comfy/model_management.py`, `get_free_memory`), and on the GB10 that
+reports roughly `MemFree` — page cache counts as used. After a session of model reads (~50 GB of
+cache, NFS on clio) it sees a few GB free and logs `loaded partially; … offloaded` instead of
+`loaded completely`. Measured on the same 149-frame job: ~2 GB offloaded cost **~8%** (11:15 vs
+10:17). The `0.00 MB usable` case was only seen on 301-frame runs, so its cost is unmeasured.
+
+**Fix: `clusterctl freemem`** (safe mid-run; the job in flight keeps its load plan, the next model
+load gets it — 3 GB free → 55 GB). Not fixed by reporting cache as free inside ComfyUI: CUDA
+allocations here do not reliably reclaim it, and NVIDIA's own DGX Spark guidance is to flush the
+cache. An automatic timer was considered and declined (2026-11-05).
+
+**In a workflow: the Free Page Cache node** (`utils/memory`, source in
+`cluster/comfyui/custom_nodes/clio_page_cache/`, installed by `clusterctl comfyui sync`). It needs
+no root: `posix_fadvise(DONTNEED)` on every model file, which is nearly all of the cache, NFS
+mounts included (clio: 948 files, 8.3 → 2.0 GB). Wire it inline right before the sampler —
+`MODEL → Free Page Cache → KSampler` — since the free-memory check happens when the sampler loads
+the model; it re-runs on every queue. Its result is in the ComfyUI log (`Free Page Cache: …`).
 
 ## Which node runs it
 - **urania** is ComfyUI-only — nothing competes for its memory. It also **owns the model store**,

@@ -265,6 +265,7 @@ models, the levers are all **single-box** — see [comfyui.md → Very large mod
 
 | Symptom | Cause / fix |
 |---|---|
+| ComfyUI runs several times slower than usual | Usually a longer video (frames). If the log also shows `loaded partially`, page cache: `clusterctl freemem` (~8%) ([details](comfyui-deployed.md#slow-generations-check-the-frame-count-first-then-page-cache)). |
 | vLLM dies at startup: *"Free memory … less than desired"* | Unified-mem startup check (page cache can lower free). Lower `VLLM_GPU_UTIL` in the profile and re-`serve`. |
 | `serve` says *"Unit clio-vllm.service not found"* | Units weren’t installed (e.g., a failed bootstrap step). Re-run `20-vllm.sh` or install `cluster/systemd/*.service` to `/etc/systemd/system` + `daemon-reload`. |
 | Host `apt` hangs / dpkg errors | Known: DOCA/MLNX-OFED 25.10 DKMS is half-configured on kernel `6.17.0-1018-nvidia`. Doesn’t affect the cluster (RoCE uses the in-tree `mlx5` driver). Avoid host `apt`; proper fix needs the `-1014` kernel or NVIDIA’s OFED update. |

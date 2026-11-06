@@ -54,9 +54,12 @@ EOF
 
   # Export to the peer's fabric IP only. Both nodes run the container as uid 1000, so ids line up;
   # no_root_squash is there so root-run maintenance (chown, model drops) works over the mount.
+  # The desk (ceres) gets the input dirs only, over the LAN, all_squashed to uid 1000 — see inventory.env.
   cat > /etc/exports <<EOF
-# Managed by scripts/bootstrap/35-comfyui-share.sh — fabric-only, single client.
+# Managed by scripts/bootstrap/35-comfyui-share.sh — the peer node over the fabric, plus inputs to the desk.
 $(for e in "${SHARED[@]}"; do echo "${e% *} $COMFY_STORE_CLIENT_IP(rw,sync,no_subtree_check,no_root_squash)"; done)
+$(if [ -n "${COMFY_STORE_DESK_IP:-}" ]; then for e in "${SHARED[@]}"; do case ${e#* } in *input)
+  echo "${e% *} $COMFY_STORE_DESK_IP(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000)";; esac; done; fi)
 EOF
   systemctl enable --now nfs-server >/dev/null 2>&1 || true
   systemctl restart nfs-server
