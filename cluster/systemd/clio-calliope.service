@@ -1,0 +1,28 @@
+# calliope log-correlation viewer: serves the column store with every segment pulled into RAM.
+# Installed and driven by `clusterctl calliope deploy` / `clusterctl mode <node> calliope`.
+#
+# It binds 127.0.0.1 only: the store holds client IPs from Scratch's logs, so it is reached from
+# ceres over an SSH tunnel (`clusterctl calliope open`), never exposed on the LAN.
+[Unit]
+Description=clio cluster - calliope column-store viewer (log correlation, store held in RAM)
+After=network-online.target
+Wants=network-online.target
+# One unified-memory pool per node: the in-RAM store, a model server and ComfyUI exclude each other.
+Conflicts=clio-comfyui.service clio-vllm.service clio-vllm-shard.service
+
+[Service]
+Type=simple
+User=colby
+WorkingDirectory=/opt/clio/calliope
+EnvironmentFile=/opt/clio/calliope/calliope.env
+ExecStart=/opt/clio/calliope/calliope --serve --no-browser --preload --store ${CALLIOPE_STORE} --listen 127.0.0.1:${CALLIOPE_PORT} --cache-mb ${CALLIOPE_CACHE_MB}
+Restart=on-failure
+RestartSec=5
+# Thousands of mmap'd column files.
+LimitNOFILE=1048576
+# The store is page cache, which the kernel reclaims under pressure; this keeps the process itself
+# (query scratch + response cache) from crowding out the rest of the node.
+MemoryHigh=112G
+
+[Install]
+WantedBy=multi-user.target

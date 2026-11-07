@@ -9,7 +9,8 @@
 #   clusterctl shard <profile>      SCALE-UP: run one big model across both nodes (PP=2)
 #   clusterctl down                 stop all model serving
 #   clusterctl use <model>          point THIS machine's Claude Code at a gateway model
-#   clusterctl mode <node> [role]   show/set a node's role: llm | studio | private | off (exclusive)
+#   clusterctl mode <node> [role]   show/set a node's role: llm | studio | private | calliope | off (exclusive)
+#   clusterctl calliope deploy|sync|open|status [node]   log-correlation viewer (store held in RAM)
 #   clusterctl comfyui up|down      start/stop ComfyUI on both nodes (in each node's current profile)
 #   clusterctl comfyui sync [node]  push the studio/private profiles + rebuild studio's model list
 #   clusterctl nginx deploy|status  HTTPS + mutual-TLS front door for ComfyUI (certs from clio-pki)
@@ -18,7 +19,7 @@
 #   clusterctl lan-mtu <mtu> [node] change management-LAN MTU, verified before it is persisted
 #   clusterctl freemem [node]       drop page cache — lets ComfyUI load models fully, not 'partially'
 #   clusterctl nccl-test            verify RoCE bandwidth + NCCL data path across the fabric
-#   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard)
+#   clusterctl logs <svc> [node]    tail a service log (vllm|gateway|comfyui|shard|calliope)
 #
 set -euo pipefail
 # Resolve through symlinks (clusterctl is symlinked into ~/.local/bin) to find the real repo.
@@ -278,34 +279,115 @@ resolve_node() {
 # ExecStop gives docker up to 60s to release the model) and only then start the incoming one.
 # Conflicts= stays as the safety net for anyone driving systemctl directly.
 cmd_mode() {
-  local name=${1:?"mode <clio|urania> [llm|studio|private|off]"} role=${2:-} node
+  local name=${1:?"mode <clio|urania> [llm|studio|private|calliope|off]"} role=${2:-} node
   node=$(resolve_node "$name")
   [ "$role" = comfy ] && role=studio   # the old name; studio is the default profile
   case "$role" in
     llm)
-      say "$name -> llm (stopping ComfyUI first, then starting clio-vllm)"
-      on "$node" 'sudo systemctl stop clio-comfyui; sudo systemctl reset-failed clio-comfyui 2>/dev/null; sudo systemctl start clio-vllm'
+      say "$name -> llm (stopping ComfyUI/calliope first, then starting clio-vllm)"
+      on "$node" 'sudo systemctl stop clio-comfyui clio-calliope 2>/dev/null; sudo systemctl reset-failed clio-comfyui 2>/dev/null; sudo systemctl start clio-vllm'
       say "Model comes from /opt/clio/active-profile.env. Cold start is slow — clusterctl logs vllm $name";;
     studio|private)
       # ComfyUI is stopped BEFORE the profile file changes: the unit's ExecStop reads the profile too.
       say "$name -> $role (stopping vLLM and any running ComfyUI, then starting clio-comfyui as $role)"
-      on "$node" "sudo systemctl stop clio-vllm clio-vllm-shard clio-comfyui
+      on "$node" "sudo systemctl stop clio-vllm clio-vllm-shard clio-comfyui clio-calliope 2>/dev/null
                   sudo systemctl reset-failed clio-vllm clio-vllm-shard clio-comfyui 2>/dev/null
                   echo COMFY_PROFILE=$role | sudo tee /opt/clio/comfyui-profile.env >/dev/null
                   sudo systemctl start clio-comfyui"
       if [ "$role" = studio ]; then say "Studio at https://$node/  (gallery: /outputs/)"
       else say "Private at https://$node:8443/  (needs a private-* client certificate)"; fi;;
+    calliope)
+      on "$node" 'test -x /opt/clio/calliope/calliope && test -f /etc/systemd/system/clio-calliope.service' \
+        || die "calliope is not deployed on $name — run: clusterctl calliope deploy $name"
+      comfy_busy "$node" && [ "${FORCE:-0}" != 1 ] \
+        && die "ComfyUI on $name has queued/running jobs; let them finish or re-run with FORCE=1"
+      # A shard worker (the vllm_node container) is started from clio's clio-vllm-shard unit, so
+      # stopping units on THIS node leaves it holding ~100 GiB. Preloading beside it would OOM-freeze
+      # the box: refuse, and say how to release it.
+      if on "$node" 'docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^vllm"'; then
+        die "$name is running a vLLM container (part of a shard?) — release it first: clusterctl down"
+      fi
+      say "$name -> calliope (stopping vLLM/ComfyUI, then loading the column store into RAM)"
+      on "$node" 'sudo systemctl stop clio-vllm clio-vllm-shard clio-comfyui 2>/dev/null
+                  sudo systemctl reset-failed clio-vllm clio-vllm-shard clio-comfyui 2>/dev/null'
+      # The store must fit beside what is left; page cache is reclaimable, process memory is not.
+      local need avail
+      need=$(on "$node" "du -sk $CALLIOPE_REMOTE_STORE 2>/dev/null | cut -f1"); need=${need:-0}
+      avail=$(on "$node" "awk '/MemAvailable/ {print \$2}' /proc/meminfo")
+      [ "$need" -lt "$avail" ] || [ "${FORCE:-0}" = 1 ] \
+        || die "store is $((need/1048576)) GiB but only $((avail/1048576)) GiB is available on $name (FORCE=1 to preload what fits)"
+      on "$node" 'sudo systemctl start clio-calliope'
+      say "Viewer: clusterctl calliope open $name   (preload progress: clusterctl logs calliope $name)";;
     off)
-      say "$name -> off (stopping both roles, freeing the memory pool)"
-      on "$node" 'sudo systemctl stop clio-comfyui clio-vllm clio-vllm-shard 2>/dev/null || true';;
+      say "$name -> off (stopping every role, freeing the memory pool)"
+      on "$node" 'sudo systemctl stop clio-comfyui clio-vllm clio-vllm-shard clio-calliope 2>/dev/null || true';;
     "")
       ;;   # fall through to the status readout below
-    *) die "mode <clio|urania> [llm|studio|private|off]";;
+    *) die "mode <clio|urania> [llm|studio|private|calliope|off]";;
   esac
   printf '\033[1;36m==>\033[0m %s: ' "$name"
   on "$node" 'v=$(systemctl is-active clio-vllm); s=$(systemctl is-active clio-vllm-shard); c=$(systemctl is-active clio-comfyui)
+              k=$(systemctl is-active clio-calliope 2>/dev/null)
               p=$(sed -n "s/^COMFY_PROFILE=//p" /opt/clio/comfyui-profile.env 2>/dev/null); p=${p:-studio}
-              if [ "$c" = active ]; then echo "$p"; elif [ "$v" = active ] || [ "$s" = active ]; then echo "llm"; else echo "off"; fi'
+              w=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -m1 "^vllm")
+              if [ "$c" = active ]; then echo "$p"; elif [ "$v" = active ] || [ "$s" = active ]; then echo "llm"
+              elif [ "$k" = active ]; then echo "calliope"; elif [ -n "$w" ]; then echo "llm (shard worker: $w)"; else echo "off"; fi'
+}
+
+# comfy_busy: true when the node's ComfyUI has jobs running or queued (so a mode switch would kill them).
+comfy_busy() {
+  on "$1" "curl -s -m 3 http://127.0.0.1:$COMFYUI_PORT/queue 2>/dev/null" \
+    | python3 -c 'import json,sys
+try: q=json.load(sys.stdin)
+except Exception: sys.exit(1)
+sys.exit(0 if q.get("queue_running") or q.get("queue_pending") else 1)' 2>/dev/null
+}
+
+# ---- calliope: log-correlation viewer over a column store held in a node's RAM ----
+#   deploy  cross-compile linux/arm64, install binary + unit + env, raise vm.max_map_count
+#   sync    rsync the column store from ceres (segments only, not the Parquet), then hot-reload
+#   open    SSH-tunnel the node's 127.0.0.1 viewer to ceres and open the browser
+#   status  role, store size on the node, what the server reports
+cmd_calliope() {
+  local action=${1:-status} name=${2:-$CALLIOPE_NODE} node
+  node=$(resolve_node "$name")
+  case "$action" in
+    deploy)
+      say "building calliope for linux/arm64 from $CALLIOPE_SRC"
+      local out; out=$(mktemp -d)
+      (cd "$CALLIOPE_SRC" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$out/calliope" .) || die "build failed"
+      printf 'CALLIOPE_STORE=%s\nCALLIOPE_PORT=%s\nCALLIOPE_CACHE_MB=%s\n' "$CALLIOPE_REMOTE_STORE" "$CALLIOPE_PORT" "$CALLIOPE_CACHE_MB" > "$out/calliope.env"
+      on "$node" "sudo install -d -o $SSH_USER -g $SSH_USER /opt/clio/calliope $CALLIOPE_REMOTE_STORE"
+      scp -q "${SSH_OPTS[@]}" "$out/calliope" "$out/calliope.env" "$REPO_ROOT/cluster/systemd/clio-calliope.service" "$SSH_USER@$node:/opt/clio/calliope/"
+      rm -rf "$out"
+      on "$node" "sudo install -m 644 /opt/clio/calliope/clio-calliope.service /etc/systemd/system/clio-calliope.service
+                  echo 'vm.max_map_count = 1048576' | sudo tee /etc/sysctl.d/90-calliope.conf >/dev/null
+                  sudo sysctl -q -p /etc/sysctl.d/90-calliope.conf
+                  sudo systemctl daemon-reload
+                  if systemctl is-active -q clio-calliope; then sudo systemctl restart clio-calliope; fi"
+      say "deployed to $name. Next: clusterctl calliope sync $name; clusterctl mode $name calliope";;
+    sync)
+      [ -d "$CALLIOPE_LOCAL_STORE" ] || die "no local store at $CALLIOPE_LOCAL_STORE"
+      say "rsync $CALLIOPE_LOCAL_STORE -> $name:$CALLIOPE_REMOTE_STORE (segments only)"
+      # Segments are immutable directories, so this is incremental; --delete drops days rebuilt or removed on ceres.
+      # (macOS ships openrsync: no --info=progress2, so keep to flags it shares with GNU rsync.)
+      rsync -a --delete --exclude='parquet/' --exclude='.tmp-*' --exclude='*.part' \
+        -e "ssh ${SSH_OPTS[*]}" \
+        "$CALLIOPE_LOCAL_STORE/" "$SSH_USER@$node:$CALLIOPE_REMOTE_STORE/"
+      if on "$node" 'systemctl is-active -q clio-calliope'; then
+        on "$node" "curl -s -m 600 -X POST http://127.0.0.1:$CALLIOPE_PORT/api/reload >/dev/null" && say "server reloaded"
+      fi;;
+    open)
+      on "$node" 'systemctl is-active -q clio-calliope' || die "calliope isn't running on $name — clusterctl mode $name calliope"
+      local lport=${CALLIOPE_LOCAL_PORT:-$CALLIOPE_PORT}
+      say "tunnel http://127.0.0.1:$lport/ -> $name:127.0.0.1:$CALLIOPE_PORT  (Ctrl-C closes it)"
+      ( sleep 1; open "http://127.0.0.1:$lport/" ) &
+      ssh "${SSH_OPTS[@]}" -N -L "$lport:127.0.0.1:$CALLIOPE_PORT" "$SSH_USER@$node";;
+    status)
+      cmd_mode "$name"
+      on "$node" "du -sh $CALLIOPE_REMOTE_STORE 2>/dev/null; curl -s -m 3 http://127.0.0.1:$CALLIOPE_PORT/api/status 2>/dev/null; echo";;
+    *) die "calliope deploy|sync|open|status [clio|urania]";;
+  esac
 }
 
 cmd_comfyui() {
@@ -519,7 +601,8 @@ cmd_logs() {
     shard)   on "$HEAD" 'sudo journalctl -u clio-vllm-shard -n 80 -f';;
     gateway) on "$HEAD" 'sudo journalctl -u clio-gateway -n 80 -f';;
     comfyui) on "$node" 'sudo journalctl -u clio-comfyui -n 80 -f';;
-    *) die "logs vllm|shard|gateway|comfyui [node]";;
+    calliope) on "$(resolve_node "${2:-$CALLIOPE_NODE}")" 'sudo journalctl -u clio-calliope -n 80 -f';;
+    *) die "logs vllm|shard|gateway|comfyui|calliope [node]";;
   esac
 }
 
@@ -542,6 +625,7 @@ case "${1:-}" in
   down)      cmd_down;;
   use)       shift; cmd_use "${1:?model required}";;
   mode)      shift; cmd_mode "$@";;
+  calliope)  shift; cmd_calliope "$@";;
   comfyui)   shift; cmd_comfyui "$@";;
   nginx)     shift; cmd_nginx "$@";;
   lan-mtu)   shift; cmd_lan_mtu "$@";;
@@ -551,5 +635,5 @@ case "${1:-}" in
   freemem)   shift; cmd_freemem "$@";;
   nccl-test) cmd_nccl_test;;
   logs)      shift; cmd_logs "$@";;
-  *) sed -n '2,22p' "$0"; exit 1;;
+  *) sed -n '2,23p' "$0"; exit 1;;
 esac
